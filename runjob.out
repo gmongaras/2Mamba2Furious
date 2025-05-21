@@ -1,0 +1,39 @@
+Node IP: 10.211.48.10
+/cm/local/apps/slurm/var/spool/job305452/slurm_script: line 49: cd: /projects/eclarson/protein_diffusion/gmongaras_sm_taylor/Gated_Attention: No such file or directory
+I0521 10:17:11.208000 1424197 site-packages/torch/distributed/run.py:675] Using nproc_per_node=1.
+I0521 10:17:11.209000 1424197 site-packages/torch/distributed/launcher/api.py:194] Starting elastic_operator with launch configs:
+I0521 10:17:11.209000 1424197 site-packages/torch/distributed/launcher/api.py:194]   entrypoint       : GPT_Trainer/train.py
+I0521 10:17:11.209000 1424197 site-packages/torch/distributed/launcher/api.py:194]   min_nodes        : 1
+I0521 10:17:11.209000 1424197 site-packages/torch/distributed/launcher/api.py:194]   max_nodes        : 1
+I0521 10:17:11.209000 1424197 site-packages/torch/distributed/launcher/api.py:194]   nproc_per_node   : 1
+I0521 10:17:11.209000 1424197 site-packages/torch/distributed/launcher/api.py:194]   run_id           : 2941
+I0521 10:17:11.209000 1424197 site-packages/torch/distributed/launcher/api.py:194]   rdzv_backend     : c10d
+I0521 10:17:11.209000 1424197 site-packages/torch/distributed/launcher/api.py:194]   rdzv_endpoint    : 10.211.48.10:29685
+I0521 10:17:11.209000 1424197 site-packages/torch/distributed/launcher/api.py:194]   rdzv_configs     : {'timeout': 900}
+I0521 10:17:11.209000 1424197 site-packages/torch/distributed/launcher/api.py:194]   max_restarts     : 0
+I0521 10:17:11.209000 1424197 site-packages/torch/distributed/launcher/api.py:194]   monitor_interval : 0.1
+I0521 10:17:11.209000 1424197 site-packages/torch/distributed/launcher/api.py:194]   log_dir          : /tmp/torchelastic_mra6rar7
+I0521 10:17:11.209000 1424197 site-packages/torch/distributed/launcher/api.py:194]   metrics_cfg      : {}
+I0521 10:17:11.209000 1424197 site-packages/torch/distributed/launcher/api.py:194] 
+I0521 10:17:11.213000 1424197 site-packages/torch/distributed/elastic/agent/server/api.py:860] [default] starting workers for entrypoint: python
+I0521 10:17:11.214000 1424197 site-packages/torch/distributed/elastic/agent/server/api.py:677] [default] Rendezvous'ing worker group
+I0521 10:17:11.308000 1424197 site-packages/torch/distributed/elastic/agent/server/api.py:525] [default] Rendezvous complete for workers. Result:
+I0521 10:17:11.308000 1424197 site-packages/torch/distributed/elastic/agent/server/api.py:525]   restart_count=0
+I0521 10:17:11.308000 1424197 site-packages/torch/distributed/elastic/agent/server/api.py:525]   master_addr=bcm-dgxa100-0007.cm.cluster
+I0521 10:17:11.308000 1424197 site-packages/torch/distributed/elastic/agent/server/api.py:525]   master_port=36821
+I0521 10:17:11.308000 1424197 site-packages/torch/distributed/elastic/agent/server/api.py:525]   group_rank=0
+I0521 10:17:11.308000 1424197 site-packages/torch/distributed/elastic/agent/server/api.py:525]   group_world_size=1
+I0521 10:17:11.308000 1424197 site-packages/torch/distributed/elastic/agent/server/api.py:525]   local_ranks=[0]
+I0521 10:17:11.308000 1424197 site-packages/torch/distributed/elastic/agent/server/api.py:525]   role_ranks=[0]
+I0521 10:17:11.308000 1424197 site-packages/torch/distributed/elastic/agent/server/api.py:525]   global_ranks=[0]
+I0521 10:17:11.308000 1424197 site-packages/torch/distributed/elastic/agent/server/api.py:525]   role_world_sizes=[1]
+I0521 10:17:11.308000 1424197 site-packages/torch/distributed/elastic/agent/server/api.py:525]   global_world_sizes=[1]
+I0521 10:17:11.308000 1424197 site-packages/torch/distributed/elastic/agent/server/api.py:525] 
+I0521 10:17:11.308000 1424197 site-packages/torch/distributed/elastic/agent/server/api.py:685] [default] Starting worker group
+I0521 10:17:11.308000 1424197 site-packages/torch/distributed/elastic/agent/server/local_elastic_agent.py:298] use_agent_store: True
+I0521 10:17:11.308000 1424197 site-packages/torch/distributed/elastic/agent/server/local_elastic_agent.py:192] Environment variable 'TORCHELASTIC_ENABLE_FILE_TIMER' not found. Do not start FileTimerServer.
+I0521 10:17:11.308000 1424197 site-packages/torch/distributed/elastic/agent/server/local_elastic_agent.py:236] Environment variable 'TORCHELASTIC_HEALTH_CHECK_PORT' not found. Do not start health check.
+2025-05-21 10:17:17.561774: I tensorflow/core/platform/cpu_feature_guard.cc:182] This TensorFlow binary is optimized to use available CPU instructions in performance-critical operations.
+To enable the following instructions: AVX2 FMA, in other operations, rebuild TensorFlow with the appropriate compiler flags.
+2025-05-21 10:17:18.800307: W tensorflow/compiler/tf2tensorrt/utils/py_utils.cc:38] TF-TRT Warning: Could not find TensorRT
+Number of parameters: 0.28B
