@@ -12,7 +12,7 @@ except ModuleNotFoundError:
 
 def main():
     # Create the model trainer
-    batch_size=36 # Total batch size across all gpus (that is, a batch size of 128 with 2 gpus has a gpu batch size of 64)
+    batch_size=32 # Total batch size across all gpus (that is, a batch size of 128 with 2 gpus has a gpu batch size of 64)
     learning_rate=1e-4
     warmup_steps=10_000
     num_steps=1_000_000
@@ -21,12 +21,15 @@ def main():
     # wandb_name="fineweb_gated_softmax_no_gate_rmsnorm_softmax_35bs_2gpu_1024seqlen"
     # wandb_name="fineweb_gated_softmax_out_gate_35bs_2gpu_1024seqlen"
     # wandb_name="fineweb_softmax_35bs_2gpu_1024seqlen"
-    wandb_name="fineweb_softmax_36bs_2gpu_1024seqlen"
+    # wandb_name="fineweb_linear_NoRoPE_2QKVConv_OutNorm_Order1_64bs_2gpu_1024seqlen"
+    # wandb_name="fineweb_poly_4thorder_rootSizedDim_32bs_2gpu_1024seqlen"
+    wandb_name="fineweb_softmax_Power6Cum_32bs_2gpu_1024seqlen"
+    # wandb_name="fineweb_softmax_seq2_expOnWholeThing_32bs_2gpu_1024seqlen"
     log_steps=10
     use_amp=True
     # attention_type="gated_softmax_no_gate_L2norm_nodivS_noclamp"
     # attention_type="softmax_divS_gatev2"
-    attention_type="softmax"
+    attention_type="softmax_seq2"
     # dataset="gmongaras/EleutherAI_the_pile_deduplicated"
     # dataset="gmongaras/SlimPajama-627B_Reupload"
     dataset="HuggingFaceFW/fineweb"
@@ -34,7 +37,7 @@ def main():
     mlp_type="normal" # gelu or normal
     clipping_value=None
     weight_decay=0.01
-    model_save_path = "models/fineweb_softmax_36bs_2gpu_1024seqlen"
+    model_save_path = "models/fineweb_softmax_Power6Cum_32bs_2gpu_1024seqlen"
     # model_save_path = "models/del"
     num_save_steps = 1_000
     keep_dataset_in_mem = False
@@ -46,8 +49,8 @@ def main():
 
     
     # Load in a checkpoint
-    load_checkpoint = False
-    checkpoint_path = "models/fineweb_softmax_36bs_2gpu_1024seqlen/"
+    load_checkpoint = True
+    checkpoint_path = "models/fineweb_softmax_Power6Cum_32bs_2gpu_1024seqlen/"
 
 
     

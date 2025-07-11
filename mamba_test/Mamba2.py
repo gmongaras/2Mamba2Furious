@@ -165,7 +165,7 @@ class Mamba2_SM(nn.Module, PyTorchModelHubMixin):
                                               process_group=self.process_group, sequence_parallel=self.sequence_parallel,
                                               **factory_kwargs)
             
-        self.register_buffer("mask", torch.tril(torch.ones(20, self.nheads, 1024, 1024)).to(self.out_proj.weight.device) == 0)
+        self.register_buffer("mask", torch.tril(torch.ones(1, self.nheads, 1024, 1024)).to(self.out_proj.weight.device) == 0)
 
     def forward(self, u, seqlen=None, seq_idx=None, cu_seqlens=None, inference_params=None):
         """

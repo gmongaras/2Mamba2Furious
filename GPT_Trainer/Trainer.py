@@ -14,10 +14,10 @@ import torch.distributed as dist
 
 try:
     from GPT_Trainer.multi_gpu_helpers import is_main_process
-    from GPT_Trainer.LlamaDecoderLayer import LlamaDecoderLayer
+    from GPT_Trainer.LlamaDecoderLayer4 import LlamaDecoderLayer
 except ModuleNotFoundError:
     from multi_gpu_helpers import is_main_process
-    from LlamaDecoderLayer import LlamaDecoderLayer
+    from LlamaDecoderLayer4 import LlamaDecoderLayer
 
 
 
@@ -98,6 +98,93 @@ def get_scheduler(optimizer, warmup_steps, total_steps):
 
 
 
+
+def get_model(model_size, model_max_length, vocab_size, attention_type):
+    if model_size == "small":
+        return transformers.LlamaForCausalLM(config=transformers.LlamaConfig.from_dict({
+            "_name_or_path": "meta-llama/Llama-2-7b-hf",
+            "architectures": [
+                "LlamaForCausalLM"
+            ],
+            "bos_token_id": 1,
+            "eos_token_id": 2,
+            "hidden_act": "silu",
+            "hidden_size": 1024, #4096,
+            "initializer_range": 0.02,
+            "intermediate_size": 1024*2, # 11008
+            "max_position_embeddings": model_max_length,
+            "model_type": "llama",
+            "num_attention_heads": 16,
+            "num_hidden_layers": 20,
+            "num_key_value_heads": 16,
+            "pretraining_tp": 1,
+            "rms_norm_eps": 1e-05,
+            "rope_scaling": None,
+            "tie_word_embeddings": False,
+            "torch_dtype": "float16",
+            "use_cache": True,
+            "vocab_size": vocab_size,
+            "attention_type": attention_type,
+        }))
+    elif model_size == "large":
+        return transformers.LlamaForCausalLM(config=transformers.LlamaConfig.from_dict({
+            "_name_or_path": "meta-llama/Llama-2-7b-hf",
+            "architectures": [
+                "LlamaForCausalLM"
+            ],
+            "bos_token_id": 1,
+            "eos_token_id": 2,
+            "hidden_act": "silu",
+            "hidden_size": 1024*3,
+            "initializer_range": 0.02,
+            "intermediate_size": 1024*6,
+            "max_position_embeddings": model_max_length,
+            "model_type": "llama",
+            "num_attention_heads": 16,
+            "num_hidden_layers": 20,
+            "num_key_value_heads": 16,
+            "pretraining_tp": 1,
+            "rms_norm_eps": 1e-05,
+            "rope_scaling": None,
+            "tie_word_embeddings": False,
+            "torch_dtype": "float16",
+            "use_cache": True,
+            "vocab_size": vocab_size,
+            "attention_type": attention_type,
+        }))
+    elif model_size == "large_depth":
+        return transformers.LlamaForCausalLM(config=transformers.LlamaConfig.from_dict({
+            "_name_or_path": "meta-llama/Llama-2-7b-hf",
+            "architectures": [
+                "LlamaForCausalLM"
+            ],
+            "bos_token_id": 1,
+            "eos_token_id": 2,
+            "hidden_act": "silu",
+            "hidden_size": 1024, #4096,
+            "initializer_range": 0.02,
+            "intermediate_size": 1024*2, # 11008
+            "max_position_embeddings": model_max_length,
+            "model_type": "llama",
+            "num_attention_heads": 32,
+            "num_hidden_layers": 60,
+            "num_key_value_heads": 32,
+            "pretraining_tp": 1,
+            "rms_norm_eps": 1e-05,
+            "rope_scaling": None,
+            "tie_word_embeddings": False,
+            "torch_dtype": "float16",
+            "use_cache": True,
+            "vocab_size": vocab_size,
+            "attention_type": attention_type,
+        }))
+    else:
+        raise RuntimeError(f"Model size must be small or large or large_depth, but got {model_size}")
+
+
+
+
+
 class Trainer():
     def __init__(self, 
             dataset,
@@ -128,6 +215,7 @@ class Trainer():
             test_loss=True,
         ):
         self.dataset = dataset
+        self.model_size = model_size
         self.learning_rate = learning_rate
         self.warmup_steps = warmup_steps
         self.num_steps = num_steps
@@ -192,86 +280,7 @@ class Trainer():
             self.tokenizer.model_max_length = model_max_length
             
             # Get model
-            if model_size == "small":
-                self.model = transformers.LlamaForCausalLM(config=transformers.LlamaConfig.from_dict({
-                    "_name_or_path": "meta-llama/Llama-2-7b-hf",
-                    "architectures": [
-                        "LlamaForCausalLM"
-                    ],
-                    "bos_token_id": 1,
-                    "eos_token_id": 2,
-                    "hidden_act": "silu",
-                    "hidden_size": 1024, #4096,
-                    "initializer_range": 0.02,
-                    "intermediate_size": 1024*2, # 11008
-                    "max_position_embeddings": model_max_length,
-                    "model_type": "llama",
-                    "num_attention_heads": 16,
-                    "num_hidden_layers": 20,
-                    "num_key_value_heads": 16,
-                    "pretraining_tp": 1,
-                    "rms_norm_eps": 1e-05,
-                    "rope_scaling": None,
-                    "tie_word_embeddings": False,
-                    "torch_dtype": "float16",
-                    "use_cache": True,
-                    "vocab_size": self.tokenizer.vocab_size,
-                    "attention_type": attention_type,
-                }))
-            elif model_size == "large":
-                self.model = transformers.LlamaForCausalLM(config=transformers.LlamaConfig.from_dict({
-                    "_name_or_path": "meta-llama/Llama-2-7b-hf",
-                    "architectures": [
-                        "LlamaForCausalLM"
-                    ],
-                    "bos_token_id": 1,
-                    "eos_token_id": 2,
-                    "hidden_act": "silu",
-                    "hidden_size": 1024*3,
-                    "initializer_range": 0.02,
-                    "intermediate_size": 1024*6,
-                    "max_position_embeddings": model_max_length,
-                    "model_type": "llama",
-                    "num_attention_heads": 16,
-                    "num_hidden_layers": 20,
-                    "num_key_value_heads": 16,
-                    "pretraining_tp": 1,
-                    "rms_norm_eps": 1e-05,
-                    "rope_scaling": None,
-                    "tie_word_embeddings": False,
-                    "torch_dtype": "float16",
-                    "use_cache": True,
-                    "vocab_size": self.tokenizer.vocab_size,
-                    "attention_type": attention_type,
-                }))
-            elif model_size == "large_depth":
-                self.model = transformers.LlamaForCausalLM(config=transformers.LlamaConfig.from_dict({
-                    "_name_or_path": "meta-llama/Llama-2-7b-hf",
-                    "architectures": [
-                        "LlamaForCausalLM"
-                    ],
-                    "bos_token_id": 1,
-                    "eos_token_id": 2,
-                    "hidden_act": "silu",
-                    "hidden_size": 1024, #4096,
-                    "initializer_range": 0.02,
-                    "intermediate_size": 1024*2, # 11008
-                    "max_position_embeddings": model_max_length,
-                    "model_type": "llama",
-                    "num_attention_heads": 32,
-                    "num_hidden_layers": 60,
-                    "num_key_value_heads": 32,
-                    "pretraining_tp": 1,
-                    "rms_norm_eps": 1e-05,
-                    "rope_scaling": None,
-                    "tie_word_embeddings": False,
-                    "torch_dtype": "float16",
-                    "use_cache": True,
-                    "vocab_size": self.tokenizer.vocab_size,
-                    "attention_type": attention_type,
-                }))
-            else:
-                raise RuntimeError(f"Model size must be small or large or large_depth, but got {model_size}")
+            self.model = get_model(model_size, model_max_length, self.tokenizer.vocab_size, attention_type)
             
             
             # Replace all self attention layers with the cosine attention layer
@@ -316,6 +325,10 @@ class Trainer():
 
             # LR Scheduler
             self.scheduler = get_scheduler(self.optimizer, warmup_steps=warmup_steps, total_steps=self.num_steps)
+
+            # Automatic mixed precision grad scaler
+            if self.use_amp:
+                self.grad_scaler = torch.amp.GradScaler("cuda")
 
             # Step starts at 0
             self.step_ckpt = 0
@@ -502,10 +515,6 @@ class Trainer():
             
             # Save wandb run id
             self.wandb_id = wandb.run.id
-        
-        # Automatic mixed precision
-        if self.use_amp:
-            grad_scaler = torch.amp.GradScaler("cuda")
     
         
         batch_loss = 0
@@ -556,19 +565,19 @@ class Trainer():
 
             # Backpropagate loss
             if self.use_amp:
-                grad_scaler.scale(loss).backward()
+                self.grad_scaler.scale(loss).backward()
             else:
                 loss.backward()
                 
             # Clip gradients
             if self.use_amp:
-                grad_scaler.unscale_(self.optimizer)
+                self.grad_scaler.unscale_(self.optimizer)
             if self.clipping_value is not None:
                 torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.clipping_value)
             
             # Take optimizer step
             if self.use_amp:
-                grad_scaler.step(self.optimizer)
+                self.grad_scaler.step(self.optimizer)
             else:
                 self.optimizer.step()
             
@@ -577,7 +586,7 @@ class Trainer():
             
             # Step the gradient scaler
             if self.use_amp:
-                grad_scaler.update()
+                self.grad_scaler.update()
             
             # Zero gradients
             self.optimizer.zero_grad()
@@ -711,6 +720,8 @@ class Trainer():
             
             # Save the config
             torch.save({
+                "dataset": self.dataset,
+                "model_size": self.model_size,
                 "learning_rate": self.learning_rate,
                 "warmup_steps": self.warmup_steps,
                 "num_steps": self.num_steps,
@@ -718,25 +729,31 @@ class Trainer():
                 "log_steps": self.log_steps,
                 "use_amp": self.use_amp,
                 "dev": self.dev,
-                "clipping_value": self.clipping_value,
-                "weight_decay": self.weight_decay,
                 "attention_type": self.attention_type,
                 "mlp_type": self.mlp_type,
+                "clipping_value": self.clipping_value,
+                "weight_decay": self.weight_decay,
                 "step_ckpt": step,
                 "wandb_id": self.wandb_id,
+                "model_max_length": self.model_max_length,
             }, os.path.join(self.model_save_path, "config.pt"))
             
             # Save the tokenizer
             torch.save(self.tokenizer, os.path.join(self.model_save_path, "tokenizer.pt"))
+
+            # Save the grad scalar
+            torch.save(self.grad_scaler, os.path.join(self.model_save_path, "scaler.pt"))
             
             
             
     def load_checkpoint(self, checkpoint_path):
         # Load the model
-        self.model = transformers.LlamaForCausalLM.from_pretrained(checkpoint_path.replace(" ", "_"))
-        
+        # self.model = transformers.LlamaForCausalLM.from_pretrained(checkpoint_path.replace(" ", "_"))
+
         # Load the config
         config = torch.load(os.path.join(checkpoint_path, "config.pt"))
+        self.dataset = config.get("dataset", "HuggingFaceFW/fineweb")
+        self.model_size = config.get("model_size", "small")
         self.learning_rate = config["learning_rate"]
         self.warmup_steps = config["warmup_steps"]
         self.num_steps = config["num_steps"]
@@ -748,9 +765,19 @@ class Trainer():
         self.weight_decay = config["weight_decay"]
         self.step_ckpt = config["step_ckpt"]
         self.wandb_id = config["wandb_id"]
-        self.num_samples = config.get("num_samples", 0)
         self.attention_type = config["attention_type"]
         self.mlp_type = config["mlp_type"]
+        self.model_max_length = config.get("model_max_length", 1024)
+
+        # Load the tokenizer
+        self.tokenizer = torch.load(os.path.join(checkpoint_path, "tokenizer.pt"), weights_only=False)            
+        self.tokenizer.pad_token_id = self.tokenizer.eos_token_id
+        self.pad_token = torch.tensor([self.tokenizer.pad_token_id])
+        # Set max sequence length
+        self.tokenizer.model_max_length = self.model_max_length 
+
+        # Load model
+        self.model = get_model(self.model_size, self.model_max_length, self.tokenizer.vocab_size, self.attention_type)
         
         # Replace all self attention layers with the cosine attention layer
         for i, layer in enumerate(self.model.model.layers):
@@ -761,13 +788,6 @@ class Trainer():
 
         # Load in params
         self.model.load_state_dict(safetensors.torch.load_file(self.model_save_path + "/model.safetensors"), strict=True)
-        
-        # Load the tokenizer
-        self.tokenizer = torch.load(os.path.join(checkpoint_path, "tokenizer.pt"), weights_only=False)            
-        self.tokenizer.pad_token_id = self.tokenizer.eos_token_id
-        self.pad_token = torch.tensor([self.tokenizer.pad_token_id])
-        # Set max sequence length
-        self.tokenizer.model_max_length = self.model_max_length 
             
             
         # Put the model on the desired device
@@ -793,16 +813,25 @@ class Trainer():
             self.model = self.model.cpu()
             
             self.model_ref = self.model
+
+        
+        num_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad) / 1_000_000_000
+        print(f"Number of parameters: {num_params:.2f}B")
             
             
             
         # Load the optimizer
         self.optimizer = torch.optim.AdamW(self.model.parameters(), lr=self.learning_rate, betas=(0.9, 0.999), weight_decay=self.weight_decay, eps=1e-7)
-        self.optimizer.load_state_dict(torch.load(os.path.join(checkpoint_path, "optimizer.pt"), map_location=self.model.device))
+        self.optimizer.load_state_dict(torch.load(os.path.join(checkpoint_path, "optimizer.pt"), map_location=self.model.device, weights_only=False))
         
         # Load the scheduler
         self.scheduler = get_scheduler(self.optimizer, warmup_steps=self.warmup_steps, total_steps=self.num_steps)
-        self.scheduler.load_state_dict(torch.load(os.path.join(checkpoint_path, "scheduler.pt"), map_location=self.model.device))
+        self.scheduler.load_state_dict(torch.load(os.path.join(checkpoint_path, "scheduler.pt"), map_location=self.model.device, weights_only=False))
+
+        # Automatic mixed precision grad scaler
+        if self.use_amp:
+            self.grad_scaler = torch.amp.GradScaler("cuda")
+            # self.grad_scaler.load_state_dict(torch.load(os.path.join(checkpoint_path, "scaler.pt"), map_location=self.model.device, weights_only=False))
 
 
 # GPT in my dreams UwU
