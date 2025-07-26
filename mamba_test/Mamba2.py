@@ -66,8 +66,8 @@ class Mamba2_SM(nn.Module, PyTorchModelHubMixin):
 
         A_proj=True, # True to have a decay gate
         no_dt=False, # True to remove time discretization
-        no_D_gate=False, # True to remove the D gate
-        no_z_norm=False, # True to remove the z normalization
+        no_D_res=False, # True to remove the D gate
+        no_z_gate=False, # True to remove the z normalization
         no_in_conv=False, # True to remove the input convolution
     ):
         factory_kwargs = {"device": device, "dtype": dtype}
@@ -99,8 +99,8 @@ class Mamba2_SM(nn.Module, PyTorchModelHubMixin):
         self.layer_idx = layer_idx
         self.A_proj = A_proj
         self.no_dt = no_dt
-        self.no_D_gate = no_D_gate
-        self.no_z_norm = no_z_norm
+        self.no_D_res = no_D_res
+        self.no_z_gate = no_z_gate
         self.no_in_conv = no_in_conv
 
         # Order: [z, x, B, C, dt]
@@ -149,7 +149,7 @@ class Mamba2_SM(nn.Module, PyTorchModelHubMixin):
             self.A_log._no_weight_decay = True
 
         # D "skip" parameter
-        if not self.no_D_gate:
+        if not self.no_D_res:
             self.D = nn.Parameter(torch.ones(self.d_ssm if self.D_has_hdim else self.nheads, device=device))
             self.D._no_weight_decay = True
 
@@ -357,9 +357,9 @@ class Mamba2_SM(nn.Module, PyTorchModelHubMixin):
             x = rearrange(x, "b l (h p) -> b l h p", p=self.headdim).float()
             B = rearrange(B, "b l (g n) -> b l g n", g=self.ngroups).float()
             C = rearrange(C, "b l (g n) -> b l g n", g=self.ngroups).float()
-            if not self.no_D_gate:
+            if not self.no_D_res:
                 D = rearrange(self.D, "(h p) -> h p", p=self.headdim).float()
-            z_ = rearrange(z, "b l (h p) -> b l h p", p=self.headdim).float()
+            # z_ = rearrange(z, "b l (h p) -> b l h p", p=self.headdim).float()
 
             # 3. SSM transformation
             batch_size = u.shape[0]
@@ -374,7 +374,7 @@ class Mamba2_SM(nn.Module, PyTorchModelHubMixin):
             C = C.repeat(1, 1, self.nheads // self.ngroups, 1)
 
             # pad_size = (self.chunk_size - seq_len % self.chunk_size) % self.chunk_size
-            if not self.no_D_gate:
+            if not self.no_D_res:
                 D_residual = D[None, None, :, :] * x
 
             # Discretize x and A
@@ -389,14 +389,14 @@ class Mamba2_SM(nn.Module, PyTorchModelHubMixin):
             # Create mask
             mask = self.mask[:, :, :seq_len, :seq_len]#.to(C.device)
             if self.A_proj:
-                A_cumsum = torch.cumsum(A, dim=-2).mT
-                A_mask = (((A_cumsum[:, :, :, None] - A_cumsum[:, :, None, :]))).masked_fill(mask, -torch.inf).exp()
+                A_cumsum = torch.cumsum(A.float(), dim=-2).mT
+                A_mask = (((A_cumsum[:, :, :, None] - A_cumsum[:, :, None, :]))).masked_fill(mask, -torch.inf).exp().to(C.dtype)
             else:
                 A_mask = ~mask
             # A_mask = (A_mask*0).masked_fill(mask, -torch.inf).exp() # Remove A mask
 
             # Inner product
-            M = C @ B.mT
+            M = ((C @ B.mT) / math.sqrt(C.shape[-1])) + 1
             M = M * A_mask
             # M = M.masked_fill(mask, -torch.inf)
             # M = M.sinh()
@@ -414,7 +414,7 @@ class Mamba2_SM(nn.Module, PyTorchModelHubMixin):
 
             # Add residual
             y = y.transpose(1, 2)
-            if not self.no_D_gate:
+            if not self.no_D_res:
                 y = y + D_residual#[:, :seq_len, :, :]
 
             # # Cutting off padded chunks
@@ -423,9 +423,9 @@ class Mamba2_SM(nn.Module, PyTorchModelHubMixin):
 
             # y = self.norm(y.reshape(batch_size, seq_len, -1), z=z.reshape(batch_size, seq_len, -1))
 
-            # Apply gate
-            if not self.no_z_norm:
-                y = y * torch.nn.functional.silu(z_.float())
+            # # Apply gate
+            # if not self.no_z_gate:
+            #     y = y * torch.nn.functional.silu(z_.float())
 
 
 
@@ -473,11 +473,24 @@ class Mamba2_SM(nn.Module, PyTorchModelHubMixin):
                     varlen_states = rest[0]
                     ssm_state.copy_(varlen_states)
             y = rearrange(y, "b l h p -> b l (h p)")
+
+            # Apply norm and z gate
             if self.rmsnorm:
-                if not self.no_z_norm:
+                # Norm and gate
+                if not self.no_z_gate:
                     y = self.norm(y, z)
+                # Norm, no gate
                 else:
                     y = self.norm(y)
+            else:
+                # No norm, gate
+                if not self.no_z_gate:
+                    y = y * torch.nn.functional.silu(z)
+                # No norm, no gate
+                else:
+                    pass
+
+            
             if d_mlp > 0:
                 y = torch.cat([F.silu(z0) * x0, y], dim=-1)
             if seqlen_og is not None:

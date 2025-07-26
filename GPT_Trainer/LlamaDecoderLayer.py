@@ -487,6 +487,7 @@ class LlamaAttention(nn.Module):
                     headdim=64,
                     D_has_hdim = True,
                     rmsnorm=True,
+                    use_mem_eff_path=False
                 )
             elif self.attention_type == "gated_softmax_plusplus_mamba":
                 mamba_config = Mamba2Config(
@@ -518,14 +519,18 @@ class LlamaAttention(nn.Module):
                     # no_in_conv=False,
                     # rmsnorm=True,
                     # expand=1,    # Block expansion factor
+                    # ngroups=1,
 
-                    A_proj=True,
-                    no_dt=False,
-                    no_D_gate=False,
-                    no_z_norm=False,
+                    A_proj=False,
+                    no_dt=True,
+                    no_D_res=True,
+                    no_z_gate=True,
                     no_in_conv=True,
-                    rmsnorm=False,
+                    rmsnorm=True,
                     expand=1,    # Block expansion factor
+
+                    # Added
+                    ngroups=config.hidden_size // 64, # Setting to number of heads
                 )
 
         if self.attention_type in ["linear_norm", "linear_norm_conv", "linear_norm_decay_conv"]:

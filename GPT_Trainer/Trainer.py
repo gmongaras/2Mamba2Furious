@@ -14,10 +14,10 @@ import torch.distributed as dist
 
 try:
     from GPT_Trainer.multi_gpu_helpers import is_main_process
-    from GPT_Trainer.LlamaDecoderLayer4 import LlamaDecoderLayer
+    from GPT_Trainer.LlamaDecoderLayer6 import LlamaDecoderLayer
 except ModuleNotFoundError:
     from multi_gpu_helpers import is_main_process
-    from LlamaDecoderLayer4 import LlamaDecoderLayer
+    from LlamaDecoderLayer6 import LlamaDecoderLayer
 
 
 
@@ -115,8 +115,10 @@ def get_model(model_size, model_max_length, vocab_size, attention_type):
             "max_position_embeddings": model_max_length,
             "model_type": "llama",
             "num_attention_heads": 16,
+            # "num_attention_heads": 2,
             "num_hidden_layers": 20,
             "num_key_value_heads": 16,
+            # "num_key_value_heads": 2,
             "pretraining_tp": 1,
             "rms_norm_eps": 1e-05,
             "rope_scaling": None,
@@ -277,7 +279,7 @@ class Trainer():
             self.pad_token = torch.tensor([self.tokenizer.pad_token_id])
             
             # Set max sequence length
-            self.tokenizer.model_max_length = model_max_length
+            self.tokenizer.model_max_length = model_max_length+1
             
             # Get model
             self.model = get_model(model_size, model_max_length, self.tokenizer.vocab_size, attention_type)
@@ -503,7 +505,8 @@ class Trainer():
         if is_main_process():
             wandb.init(
                 # project="Gated_Attention",
-                project="Gated_Attention_V2",
+                # project="Gated_Attention_V2",
+                project="Mamba_buildup",
                 name=self.wandb_name,
                 notes=None, # May add notes later
                 

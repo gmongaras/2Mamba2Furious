@@ -23,13 +23,13 @@ def main():
     # wandb_name="fineweb_softmax_35bs_2gpu_1024seqlen"
     # wandb_name="fineweb_linear_NoRoPE_2QKVConv_OutNorm_Order1_64bs_2gpu_1024seqlen"
     # wandb_name="fineweb_poly_4thorder_rootSizedDim_32bs_2gpu_1024seqlen"
-    wandb_name="fineweb_softmax_Power6Cum_32bs_2gpu_1024seqlen"
-    # wandb_name="fineweb_softmax_seq2_expOnWholeThing_32bs_2gpu_1024seqlen"
+    # wandb_name="fineweb_Mamba_NoDRes_NoZGate_NoDT_noAProj_noConv__Plus1DivSqrtD_Multihead__32bs_2gpu_16Heads_1024seqlen"
+    wandb_name="SM_NoPE"
     log_steps=10
     use_amp=True
     # attention_type="gated_softmax_no_gate_L2norm_nodivS_noclamp"
     # attention_type="softmax_divS_gatev2"
-    attention_type="softmax_seq2"
+    attention_type="gated_softmax_plusplus_mamba2"
     # dataset="gmongaras/EleutherAI_the_pile_deduplicated"
     # dataset="gmongaras/SlimPajama-627B_Reupload"
     dataset="HuggingFaceFW/fineweb"
@@ -37,7 +37,7 @@ def main():
     mlp_type="normal" # gelu or normal
     clipping_value=None
     weight_decay=0.01
-    model_save_path = "models/fineweb_softmax_Power6Cum_32bs_2gpu_1024seqlen"
+    model_save_path = "models/SM_NoPE"
     # model_save_path = "models/del"
     num_save_steps = 1_000
     keep_dataset_in_mem = False
@@ -49,8 +49,8 @@ def main():
 
     
     # Load in a checkpoint
-    load_checkpoint = True
-    checkpoint_path = "models/fineweb_softmax_Power6Cum_32bs_2gpu_1024seqlen/"
+    load_checkpoint = False
+    checkpoint_path = "models/SM_NoPE/"
 
 
     

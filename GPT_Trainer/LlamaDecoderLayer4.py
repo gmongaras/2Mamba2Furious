@@ -341,7 +341,7 @@ class LlamaAttention(nn.Module):
 
         # Params
         # self.order = 4
-        self.powers = [0, 1, 3]
+        self.powers = [1]
         self.learnable_coefficients = True
         self.gamma_domain = False
         self.use_norm = True
@@ -391,6 +391,8 @@ class LlamaAttention(nn.Module):
             
             if self.learnable_coefficients:
                 self.order_coefficients = nn.Parameter(self.order_coefficients)
+        else:
+            self.order_coefficients = None
         # self.order_coefficients = nn.Parameter((1/torch.arange(1, self.order+1).cumprod(-1))[:, None, None, None].repeat(1, config.num_attention_heads, 1, 1).float())
         # self.register_buffer("order_coefficients", (1/torch.arange(1, self.order+1).cumprod(-1))[:, None, None, None].repeat(1, config.num_attention_heads, 1, 1).float())
 
@@ -470,6 +472,8 @@ class LlamaAttention(nn.Module):
 
         
         def forwrd_gated(query_states, key_states, value_states, attention_mask, order_coefficients, norm):
+            # return norm((1/2) * ((query_states @ key_states.mT * (1/math.sqrt(key_states.shape[-1]))).masked_fill(attention_mask!=0, torch.tensor(0.0, device=query_states.device)) @ value_states.float())**2)
+
             # Deltanet
             if self.delta:
                 value_states = value_states - key_states
