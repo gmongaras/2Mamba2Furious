@@ -54,5 +54,5 @@ srun /home/gmongaras/miniconda3/bin/torchrun \
 --nproc_per_node $nproc_per_node \
 --rdzv_id $RANDOM \
 --rdzv_backend c10d \
---rdzv_endpoint $head_node_ip:29829 \
+--rdzv_endpoint $head_node_ip:29864 \
 GPT_Trainer/train.py

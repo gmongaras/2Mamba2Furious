@@ -396,7 +396,7 @@ class Mamba2_SM(nn.Module, PyTorchModelHubMixin):
             # A_mask = (A_mask*0).masked_fill(mask, -torch.inf).exp() # Remove A mask
 
             # Inner product
-            M = ((C @ B.mT) / math.sqrt(C.shape[-1])) + 1
+            M = ((C @ B.mT) / math.sqrt(C.shape[-1]))
             M = M * A_mask
             # M = M.masked_fill(mask, -torch.inf)
             # M = M.sinh()
