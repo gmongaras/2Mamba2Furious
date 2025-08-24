@@ -14,10 +14,10 @@ import torch.distributed as dist
 
 try:
     from GPT_Trainer.multi_gpu_helpers import is_main_process
-    from GPT_Trainer.LlamaDecoderLayer6 import LlamaDecoderLayer
+    from GPT_Trainer.LlamaDecoderLayer7 import LlamaDecoderLayer
 except ModuleNotFoundError:
     from multi_gpu_helpers import is_main_process
-    from LlamaDecoderLayer6 import LlamaDecoderLayer
+    from LlamaDecoderLayer7 import LlamaDecoderLayer
 
 
 

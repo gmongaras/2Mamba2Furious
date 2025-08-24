@@ -23,6 +23,7 @@ from torch.utils.checkpoint import checkpoint
 
 from einops import rearrange
 from causal_conv1d import causal_conv1d_fn
+from kernel._2Mamba2Furious_exp import _attention as _2Mamba2Furious_exp
 
 
 
@@ -692,33 +693,7 @@ class LlamaAttention(nn.Module):
             # return (query_states @ key_states.mT / math.sqrt(key_states.shape[-1]) + attention_mask).softmax(dim=-1) @ value_states
             
         
-        attn_output = checkpoint(
-            forwrd_gated, query_states.clone(), key_states.clone(), value_states.clone(), attention_mask, self.order_coefficients, self.out_norm, A, use_reentrant=False
-        )
-            
-        from mamba_test.Mamba_Custom import mamba_chunk_scan_combined
-        def forwrd_kernel(query_states, key_states, value_states, attention_mask, order_coefficients, norm, A):
-            def kron(X):
-                return (X[..., None] * X[..., None, :]).flatten(-2, -1)
-            chunk_size = 256
-            # Note that mamba 2 still adds the *dt factor to the values. This needs to be removed in the kernel
-            # It also doesn't have the factor_. To add this, you can just multiply the keys by the factor_
-            query_states = query_states * 1/math.sqrt(key_states.shape[-1])
-            value_states = value_states * 1/2
-            # To get the squared inner product, we need to explicitly do the kron prod
-            query_states = kron(query_states)
-            key_states = kron(key_states)
-            out = mamba_chunk_scan_combined(x=value_states.to(torch.bfloat16).transpose(1, 2), dt=A.to(torch.bfloat16), A=torch.ones(value_states.shape[1]).to(torch.bfloat16).to(query_states.device), B=key_states.to(torch.bfloat16).transpose(1, 2), C=query_states.to(torch.bfloat16).transpose(1, 2), chunk_size=chunk_size, D=None, z=None, dt_bias=None, initial_states=None, seq_idx=None, cu_seqlens=None, dt_softplus=False, dt_limit=(-float("inf"), float("inf")), return_final_states=False, return_varlen_states=False).transpose(1, 2)
-
-            # Output
-            return norm(out)
-
-        # attn_output = checkpoint(
-        #     forwrd_kernel, query_states, key_states, value_states, attention_mask, self.order_coefficients, self.out_norm, A, use_reentrant=False
-        # )
-        
-        # Output norm
-        # attn_output = self.norm(attn_output)
+        attn_output = _2Mamba2Furious_exp.apply(query_states.half(), key_states.half(), value_states.half(), A.cumsum(-1).half(), True, 1/math.sqrt(key_states.shape[-1]), False)
 
 
 
