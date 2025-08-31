@@ -24,7 +24,7 @@ def main():
     # wandb_name="fineweb_linear_NoRoPE_2QKVConv_OutNorm_Order1_64bs_2gpu_1024seqlen"
     # wandb_name="fineweb_poly_4thorder_rootSizedDim_32bs_2gpu_1024seqlen"
     # wandb_name="fineweb_Mamba_NoDRes_NoZGate_NoDT_noAProj_noConv__Plus1DivSqrtD_Multihead__32bs_2gpu_16Heads_1024seqlen"
-    wandb_name="2048L_Exp_NoPE_Conv_AMask_AMaskTypeNEGSOFTPLUS_NOAMaskBias_AMaskValueDiscretizationDT_SMNorm"
+    wandb_name="Ker_4096L_Exp_NoPE_Conv_AMask_AMaskTypeNEGSOFTPLUS_NOAMaskBias_AMaskValueDiscretizationDT_SMNorm"
     log_steps=10
     use_amp=True
     # attention_type="gated_softmax_no_gate_L2norm_nodivS_noclamp"
@@ -37,11 +37,11 @@ def main():
     mlp_type="normal" # gelu or normal
     clipping_value=None
     weight_decay=0.01
-    model_save_path = "models/2048L_Exp_NoPE_Conv_AMask_AMaskTypeNEGSOFTPLUS_NOAMaskBias_AMaskValueDiscretizationDT_SMNorm"
+    model_save_path = "models/Ker_4096L_Exp_NoPE_Conv_AMask_AMaskTypeNEGSOFTPLUS_NOAMaskBias_AMaskValueDiscretizationDT_SMNorm"
     # model_save_path = "models/del"
     num_save_steps = 1_000
     keep_dataset_in_mem = False
-    model_max_length = 2048
+    model_max_length = 2048*2
     test_per = 0.001
     num_steps_test = 10_000
     model_size = "small" # "small" (~300 million) or "large" (~2 billion) or "large_depth"
@@ -50,7 +50,7 @@ def main():
     
     # Load in a checkpoint
     load_checkpoint = False
-    checkpoint_path = "models/2048L_Exp_NoPE_Conv_AMask_AMaskTypeNEGSOFTPLUS_NOAMaskBias_AMaskValueDiscretizationDT_SMNorm/"
+    checkpoint_path = "models/Ker_2048L_Exp_NoPE_Conv_AMask_AMaskTypeNKer_4096L_Exp_NoPE_Conv_AMask_AMaskTypeNEGSOFTPLUS_NOAMaskBias_AMaskValueDiscretizationDT_SMNormEGSOFTPLUS_NOAMaskBias_AMaskValueDiscretizationDT_SMNorm/"
 
 
     

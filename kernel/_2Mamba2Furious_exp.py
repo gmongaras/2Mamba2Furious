@@ -57,6 +57,15 @@ def _attn_fwd_inner(acc, l_i, m_i, q, A_q,  #
         k = desc_k.load([offsetk_y, 0]).T
         qk = tl.dot(q, k)
         
+        # Add A mask
+        A_k = desc_A_k.load([offsetk_y])
+        A = (A_q[:, None] - A_k[None, :])
+        ## For some reason this produces NaNs with exp2
+        ## I think it's because the positive part (when i > j) above the diag
+        ## gets really large, producing infs. Then multiplying by inf gives nan
+        # p = p * tl.math.exp(A.to(tl.float32)) 
+        qk = qk.to(tl.float32) + A.to(tl.float32)
+        
         # Masking diag and off diag
         if STAGE == 2:
             mask = offs_m[:, None] >= (start_n + offs_n[None, :])
@@ -66,15 +75,17 @@ def _attn_fwd_inner(acc, l_i, m_i, q, A_q,  #
         else:
             m_ij = tl.maximum(m_i, tl.max(qk, 1) * qk_scale)
             qk = qk * qk_scale - m_ij[:, None]
-        p = tl.math.exp2(qk)
+        p = tl.math.exp2(qk).to(tl.float32)
         
-        # Multiply by A mask
-        A_k = desc_A_k.load([offsetk_y])
-        A = (A_q[:, None] - A_k[None, :])
-        ## For some reason this produces NaNs with exp2
-        ## I think it's because the positive part (when i > j) above the diag
-        ## gets really large, producing infs. Then multiplying by inf gives nan
-        p = p * tl.math.exp(A.to(tl.float32)) 
+        # # Multiply by A mask
+        # A_k = desc_A_k.load([offsetk_y])
+        # A = (A_q[:, None] - A_k[None, :])
+        # ## For some reason this produces NaNs with exp2
+        # ## I think it's because the positive part (when i > j) above the diag
+        # ## gets really large, producing infs. Then multiplying by inf gives nan
+        # # p = p * tl.math.exp(A.to(tl.float32)) 
+        
+        # p = tl.math.exp2(qk.to(tl.float32) + A.to(tl.float32) * 1.44269504)
         
         # -- compute correction factor
         alpha = tl.math.exp2(m_i - m_ij)
@@ -280,7 +291,6 @@ def _attn_bwd_dkdv(dk, dv, da_k,  #
     offs_n = start_n + tl.arange(0, BLOCK_N1)
     offs_k = tl.arange(0, HEAD_DIM)
     qT_ptrs = Q + offs_m[None, :] * stride_tok + offs_k[:, None] * stride_d
-    Aq_ptrs = A + offs_m
     do_ptrs = DO + offs_m[:, None] * stride_tok + offs_k[None, :] * stride_d
     # BLOCK_N1 must be a multiple of BLOCK_M1, otherwise the code wouldn't work.
     tl.static_assert(BLOCK_N1 % BLOCK_M1 == 0)
@@ -292,12 +302,14 @@ def _attn_bwd_dkdv(dk, dv, da_k,  #
         offs_m = curr_m + tl.arange(0, BLOCK_M1)
         m = tl.load(M + offs_m)
         qkT = tl.dot(k, qT)
-        pT = tl.math.exp2(qkT - m[None, :])
         
-        # Multiply by A mask
+        # Add the A mask
         Aq = tl.load(A + offs_m)
-        A_maskT = tl.math.exp(Aq.to(tl.float32)[None, :] - Ak.to(tl.float32)[:, None])
-        pT = pT * A_maskT
+        A_maskT = Aq.to(tl.float32)[None, :] - Ak.to(tl.float32)[:, None]
+        qkT = qkT + A_maskT
+        
+        # Subtract the min and exponentiate
+        pT = tl.math.exp2(qkT - m[None, :])
         
         # Autoregressive masking.
         if MASK:
@@ -353,23 +365,27 @@ def _attn_bwd_dqda(dq, da_q, q, K, V, A, Aq,  #
     curr_n = start_n
     step_n = BLOCK_N2
     for blk_idx in range(num_steps):
+        # Inner product
         kT = tl.load(kT_ptrs)
         vT = tl.load(vT_ptrs)
         qk = tl.dot(q, kT)
-        p = tl.math.exp2(qk - m)
-        offs_n = curr_n + tl.arange(0, BLOCK_N2)
         
-        # Create A mask
+        # Create A mask and add it to qk
+        offs_n = curr_n + tl.arange(0, BLOCK_N2)
         Ak = tl.load(A + offs_n)
-        A_mask = tl.math.exp(Aq.to(tl.float32)[:, None] - Ak.to(tl.float32)[None, :])
+        A_mask = Aq.to(tl.float32)[:, None] - Ak.to(tl.float32)[None, :]
+        qk = qk + A_mask
+        
+        # Exponentiate
+        p = tl.math.exp2(qk - m)
         
         # Autoregressive masking.
         if MASK:
             mask = (offs_m[:, None] >= offs_n[None, :])
-            A_mask = tl.where(mask, A_mask, 0.0)
+            p = tl.where(mask, p, 0.0)
             
         # Multiply by A mask
-        p = p * A_mask
+        # p = p * A_mask
             
         # Compute dP and dS.
         dp = tl.dot(do, vT).to(tl.float32)
@@ -533,6 +549,10 @@ def _attn_bwd(Q, K, V, A, sm_scale,  #
     dq *= LN2
     tl.store(dq_ptrs, dq)
     
+    # Di is divided by the sm_scale. We need to undo that
+    da_k *= 1
+    da_q *= LN2
+    
     # Write back da
     da_q_ptrs = DA_Q + offs_m
     tl.store(da_q_ptrs, da_q)
@@ -544,10 +564,15 @@ class _attention(torch.autograd.Function):
 
     @staticmethod
     def forward(ctx, q, k, v, A_cumsum, causal, sm_scale, warp_specialize=True):
-        # Multiply the A values by 1/ln(2) so we can use exp2 instead of exp
-        # A = A * 1.44269504
-        # Cumulative sum for A
-        # A_cumsum = A.float().cumsum(-1)
+        q = q.contiguous()
+        k = k.contiguous()
+        v = v.contiguous()
+        A_cumsum = A_cumsum.contiguous()
+        
+        # Divide the A mask by the sm_scale. It will be multiplied later and we
+        # don't want this to have any effect on the A .
+        # Since 1/ln(2) will be combined with sm_scale, don't scale here
+        A_cumsum = A_cumsum / sm_scale
         
         # shape constraints
         HEAD_DIM_Q, HEAD_DIM_K = q.shape[-1], k.shape[-1]
@@ -622,8 +647,13 @@ class _attention(torch.autograd.Function):
     @staticmethod
     def backward(ctx, do):
         q, k, v, o, M, A_cumsum = ctx.saved_tensors
-        assert do.is_contiguous()
-        assert q.stride() == k.stride() == v.stride() == o.stride() == do.stride()
+        do = do.contiguous()
+        q = q.contiguous()
+        k = k.contiguous()
+        v = v.contiguous()
+        o = o.contiguous()
+        # assert do.is_contiguous()
+        # assert q.stride() == k.stride() == v.stride() == o.stride() == do.stride()
         dq = torch.empty_like(q)
         dk = torch.empty_like(k)
         dv = torch.empty_like(v)
@@ -635,8 +665,15 @@ class _attention(torch.autograd.Function):
         BLOCK_M1, BLOCK_N1, BLOCK_M2, BLOCK_N2 = 32, 128, 128, 32
         BLK_SLICE_FACTOR = 2
         RCP_LN2 = 1.4426950408889634  # = 1.0 / ln(2)
+        
+        # Merge the softmax scale into k
         arg_k = k
         arg_k = arg_k * (ctx.sm_scale * RCP_LN2)
+        # Scale A cumsum just like K. This is what we did in the forward pass
+        # so we also need to do it here.
+        arg_A_cumsum = A_cumsum
+        arg_A_cumsum = arg_A_cumsum * (ctx.sm_scale * RCP_LN2)
+        
         PRE_BLOCK = 128
         assert N_CTX % PRE_BLOCK == 0
         pre_grid = (N_CTX // PRE_BLOCK, BATCH * N_HEAD)
@@ -649,7 +686,7 @@ class _attention(torch.autograd.Function):
         )
         grid = (N_CTX // BLOCK_N1, 1, BATCH * N_HEAD)
         _attn_bwd[grid](
-            q, arg_k, v, A_cumsum, ctx.sm_scale, do, dq, dk, dv, dA_q, dA_k,  #
+            q, arg_k, v, arg_A_cumsum, ctx.sm_scale, do, dq, dk, dv, dA_q, dA_k,  #
             M, delta,  #
             q.stride(0), q.stride(1), q.stride(2), q.stride(3),  #
             A_cumsum.stride(0), A_cumsum.stride(1),
@@ -754,21 +791,21 @@ def test_op(Z, H, N_CTX, HEAD_DIM, causal, warp_specialize, mode, provider, dtyp
 if __name__ == "__main__":
         
     
-    # test_op(
-    #     4,
-    #     16,
-    #     1024,
-    #     64,
-    #     causal=True,
-    #     warp_specialize=False,
-    #     mode="fwd",
-    #     provider="triton-fp16",
-    # )
+    test_op(
+        16,
+        16,
+        2048,
+        64,
+        causal=True,
+        warp_specialize=False,
+        mode="fwd",
+        provider="triton-fp16",
+    )
 
     test_op(
-        4,
         16,
-        1024,
+        16,
+        2048,
         64,
         causal=True,
         warp_specialize=False,

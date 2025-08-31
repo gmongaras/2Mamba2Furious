@@ -337,7 +337,7 @@ class LlamaAttention(nn.Module):
 
 
 
-        self.use_exp = False
+        self.use_exp = True
 
         # Params
         self.powers = [2]
@@ -692,8 +692,13 @@ class LlamaAttention(nn.Module):
             return norm(attn_weights @ value_states.float())
             # return (query_states @ key_states.mT / math.sqrt(key_states.shape[-1]) + attention_mask).softmax(dim=-1) @ value_states
             
+            
+        # attn_output_ = checkpoint(
+        #     forwrd_gated, query_states.clone().half(), key_states.clone().half(), value_states.clone().half(), attention_mask, self.order_coefficients, self.out_norm, A, use_reentrant=False
+        # )
         
-        attn_output = _2Mamba2Furious_exp.apply(query_states.half(), key_states.half(), value_states.half(), A.cumsum(-1).half(), True, 1/math.sqrt(key_states.shape[-1]), False)
+        A_cumsum = A.mT.float().cumsum(-1)
+        attn_output = _2Mamba2Furious_exp.apply(query_states.half(), key_states.half(), value_states.half(), A_cumsum.float(), True, 1/math.sqrt(key_states.shape[-1]), False)
 
 
 

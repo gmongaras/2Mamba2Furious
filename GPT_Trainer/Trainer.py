@@ -7,7 +7,7 @@ import wandb
 from tqdm import tqdm
 from contextlib import nullcontext
 import safetensors
-
+import math
 
 from torch.nn.parallel import DistributedDataParallel as DDP
 import torch.distributed as dist
@@ -19,6 +19,8 @@ except ModuleNotFoundError:
     from multi_gpu_helpers import is_main_process
     from LlamaDecoderLayer7 import LlamaDecoderLayer
 
+
+PRE_BLOCK = 128
 
 
 
@@ -348,7 +350,15 @@ class Trainer():
         
     def prepare_data(self, batch):
         # Tokenize the batch
-        batch = self.tokenizer([i["text"] for i in batch], truncation=True, padding="longest", padding_side=self.padding_side, return_tensors="pt", max_length=self.tokenizer.model_max_length)
+        # batch = self.tokenizer([i["text"] for i in batch], truncation=True, padding="longest", padding_side=self.padding_side, return_tensors="pt", max_length=self.tokenizer.model_max_length)
+        # Get the max length sequence 
+        seqs = [i["text"] for i in batch]
+        encoded = [self.tokenizer.encode(t, add_special_tokens=True) for t in seqs]
+        max_seq_len = max(len(e) for e in encoded)
+        # Pad to PRE_BLOCK size
+        max_seq_len_padded = PRE_BLOCK*math.ceil(max_seq_len / PRE_BLOCK)+1
+        length_ = min(self.tokenizer.model_max_length, max_seq_len_padded)
+        batch = self.tokenizer([i["text"] for i in batch], truncation=True, padding="max_length", padding_side=self.padding_side, return_tensors="pt", max_length=length_)
 
         # # Max length of the input (+1 for the extra pad token), but not more than the model's max length
         # max_length = min(max([len(x) for x in batch["input_ids"]]), self.tokenizer.model_max_length)
