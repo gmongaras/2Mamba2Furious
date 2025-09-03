@@ -108,9 +108,9 @@ def _attn_fwd_inner(acc, l_i, m_i, q, A_q,  #
             v = desc_v.load([0, offsetv_y]).T
         else:
             v = desc_v.load([offsetv_y, 0])
-        p = p.to(dtype)
+        p = p
         # note that this non transposed v for FP8 is only supported on Blackwell
-        acc = tl.dot(p, v, acc)
+        acc = tl.dot(p, v.to(tl.float32), acc)
         # update m_i and l_i
         # place this at the end of the loop to reduce register pressure
         l_i = l_i * alpha + l_ij
@@ -265,8 +265,167 @@ def _attn_fwd(sm_scale, M, #
     m_ptrs = M + off_hz * N_CTX + offs_m
     tl.store(m_ptrs, m_i)
     desc_o.store([qo_offset_y, 0], acc.to(dtype))
+    
+    
+    
+    
+    
+    
+    
+    
+    
+@triton.jit
+def _attn_bwd_preprocess_inner(acc, do, q, A_q, m, #
+                    desc_k, desc_v, desc_A_k, #
+                    qo_offset_y, offset_y, dtype: tl.constexpr, start_m, qk_scale,  #
+                    BLOCK_M: tl.constexpr, HEAD_DIM: tl.constexpr, BLOCK_N: tl.constexpr,  #
+                    STAGE: tl.constexpr, offs_m: tl.constexpr, offs_n: tl.constexpr,  #
+                    N_CTX: tl.constexpr, warp_specialize: tl.constexpr, IS_HOPPER: tl.constexpr):
+    # range of values handled by this stage
+    if STAGE == 1:
+        lo, hi = 0, start_m * BLOCK_M
+    elif STAGE == 2:
+        lo, hi = start_m * BLOCK_M, (start_m + 1) * BLOCK_M
+        lo = tl.multiple_of(lo, BLOCK_M)
+    # causal = False
+    else:
+        lo, hi = 0, N_CTX
+    offsetk_y = offset_y + lo
+    if dtype == tl.float8e5:
+        offsetv_y = offset_y * HEAD_DIM + lo
+    else:
+        offsetv_y = offset_y + lo
+    # loop over k, v and update accumulator
+    for start_n in tl.range(lo, hi, BLOCK_N, warp_specialize=warp_specialize):
+        start_n = tl.multiple_of(start_n, BLOCK_N)
+        # -- compute qk ----
+        k = desc_k.load([offsetk_y, 0]).T
+        qk = tl.dot(q, k)
+        
+        # Compute A mask
+        A_k = desc_A_k.load([offsetk_y])
+        A_mask = (A_q[:, None] - A_k[None, :]).to(tl.float32)
+        
+        # Squared inner product on q and k
+        qk = qk.to(tl.float32) * qk_scale
+        qk2 = qk * qk 
+        
+        # Subtractax from A mask and calculate exponentate the A mask
+        A_mask_m = tl.exp2(A_mask - m[:, None])
+        
+        # Compute qkA
+        p = qk2 * A_mask_m
+        
+        # Masking diag and off diag
+        if STAGE == 2:
+            # Get mask
+            mask = offs_m[:, None] >= (start_n + offs_n[None, :])
+            
+            # Mask the attention scores
+            p = tl.where(mask, p, 0)
+            
+        # Compute dp = do vT
+        v = desc_v.load([offsetk_y, 0]).T
+        dp = tl.dot(do, v)
+        
+        # scalar-wise multiply dp and normalized p
+        grad = dp * p
+        
+        # sum and accumulate
+        acc += tl.sum(grad, axis=1)
+        
+        # Step offsets
+        offsetk_y += BLOCK_N
+        offsetv_y += BLOCK_N
+        
+    return acc
+    
+@triton.autotune(configs=list(filter(keep, configs)), key=["N_CTX", "HEAD_DIM", "FP8_OUTPUT", "warp_specialize"],
+                 prune_configs_by={'early_config_prune': prune_invalid_configs})
+@triton.jit
+def _attn_bwd_preprocess_(sm_scale, S, #
+              Z, H, desc_q, desc_k, desc_v, desc_do, desc_A, desc_m, N_CTX,  #
+              HEAD_DIM: tl.constexpr,  #
+              BLOCK_M: tl.constexpr,  #
+              BLOCK_N: tl.constexpr,  #
+              FP8_OUTPUT: tl.constexpr,  #
+              STAGE: tl.constexpr,  #
+              warp_specialize: tl.constexpr,  #
+              IS_HOPPER: tl.constexpr,  #
+              ):
+    dtype = tl.float8e5 if FP8_OUTPUT else tl.float16
+    tl.static_assert(BLOCK_N <= HEAD_DIM)
+    start_m = tl.program_id(0)
+    off_hz = tl.program_id(1)
+    off_z = off_hz // H
+    off_h = off_hz % H
+
+    y_dim = Z * H * N_CTX
+    desc_q = _maybe_make_tensor_desc(desc_q, shape=[y_dim, HEAD_DIM], strides=[HEAD_DIM, 1],
+                                     block_shape=[BLOCK_M, HEAD_DIM])
+    if FP8_OUTPUT:
+        desc_v = _maybe_make_tensor_desc(desc_v, shape=[HEAD_DIM, y_dim], strides=[N_CTX, 1],
+                                         block_shape=[HEAD_DIM, BLOCK_N])
+    else:
+        desc_v = _maybe_make_tensor_desc(desc_v, shape=[y_dim, HEAD_DIM], strides=[HEAD_DIM, 1],
+                                         block_shape=[BLOCK_N, HEAD_DIM])
+    desc_k = _maybe_make_tensor_desc(desc_k, shape=[y_dim, HEAD_DIM], strides=[HEAD_DIM, 1],
+                                     block_shape=[BLOCK_N, HEAD_DIM])
+    desc_do = _maybe_make_tensor_desc(desc_do, shape=[y_dim, HEAD_DIM], strides=[HEAD_DIM, 1],
+                                     block_shape=[BLOCK_M, HEAD_DIM])
+    desc_A_q = _maybe_make_tensor_desc(desc_A, shape=[y_dim], strides=[1],
+                                     block_shape=[BLOCK_M])
+    desc_A_k = _maybe_make_tensor_desc(desc_A, shape=[y_dim], strides=[1],
+                                     block_shape=[BLOCK_N])
+    desc_m = _maybe_make_tensor_desc(desc_m, shape=[y_dim], strides=[1],
+                                     block_shape=[BLOCK_M])
+
+    offset_y = off_z * (N_CTX * H) + off_h * N_CTX
+    qo_offset_y = offset_y + start_m * BLOCK_M
+    # initialize offsets
+    offs_m = start_m * BLOCK_M + tl.arange(0, BLOCK_M)
+    offs_n = tl.arange(0, BLOCK_N)
+    # Initialize output
+    acc = tl.zeros([BLOCK_M], dtype=tl.float32)
+    # load scales
+    qk_scale = sm_scale
+    # qk_scale *= 1.44269504  # 1/ln(2)
+    # Note that this converts a base 2 exp via: e^A = 2^(A*log_2(e)) = 2^(A*(1/ln(2)))
+    # load q: it will stay in SRAM throughout
+    q = desc_q.load([qo_offset_y, 0])
+    # Load in do
+    do = desc_do.load([qo_offset_y, 0])
+    # Load in the max values
+    m = desc_m.load([qo_offset_y])
+    # Load A_Q
+    A_q = desc_A_q.load([qo_offset_y])
+    # stage 1: off-band
+    # For causal = True, STAGE = 3 and _attn_fwd_inner gets 1 as its STAGE
+    # For causal = False, STAGE = 1, and _attn_fwd_inner gets 3 as its STAGE
+    if STAGE & 1:
+        acc = _attn_bwd_preprocess_inner(acc, do, q, A_q, m,  #
+                                        desc_k, desc_v, desc_A_k, #
+                                        qo_offset_y, offset_y, dtype, start_m, qk_scale,  #
+                                        BLOCK_M, HEAD_DIM, BLOCK_N,  #
+                                        4 - STAGE, offs_m, offs_n, N_CTX,  #
+                                        warp_specialize, IS_HOPPER)
+    # stage 2: on-band
+    if STAGE & 2:
+        acc = _attn_bwd_preprocess_inner(acc, do, q, A_q, m,  #
+                                        desc_k, desc_v, desc_A_k, #
+                                        qo_offset_y, offset_y, dtype, start_m, qk_scale,  #
+                                        BLOCK_M, HEAD_DIM, BLOCK_N,  #
+                                        2, offs_m, offs_n, N_CTX,  #
+                                        warp_specialize, IS_HOPPER)
+    # epilogue
+    
+    # Divide by the denominator
+    s_ptrs = S + off_hz * N_CTX + offs_m
+    tl.store(s_ptrs, acc)
 
 
+# Computes the summation part cause it needs to go over the entire sequence
+# \sum do * o 
 @triton.jit
 def _attn_bwd_preprocess(O, DO,  #
                          Delta,  #
@@ -289,7 +448,7 @@ def _attn_bwd_preprocess(O, DO,  #
 def _attn_bwd_dkdv(dk, dv, da_k,  #
                    Q, k, v, A, Ak, sm_scale,  #
                    DO,  #
-                   M, #
+                   M, S, #
                    # shared by Q/K/V/DO.
                    stride_tok, stride_d,  #
                    H, N_CTX, BLOCK_M1: tl.constexpr,  #
@@ -312,6 +471,7 @@ def _attn_bwd_dkdv(dk, dv, da_k,  #
         # Load m before computing qk to reduce pipeline stall.
         offs_m = curr_m + tl.arange(0, BLOCK_M1)
         m = tl.load(M + offs_m)
+        s = tl.load(S + offs_m)
         
         # Compute qk**2
         qkT = tl.dot(k, qT)
@@ -320,8 +480,7 @@ def _attn_bwd_dkdv(dk, dv, da_k,  #
         # Compute the A mask and exponentiate the negative max
         # which also gives the denominator
         Aq = tl.load(A + offs_m)
-        A_maskT = Aq.to(tl.float32)[None, :] - Ak.to(tl.float32)[:, None]
-        A_maskTm = tl.math.exp2(A_maskT - m[None, :])
+        A_maskTm = tl.math.exp2(Aq.to(tl.float32)[None, :] - Ak.to(tl.float32)[:, None] - m[None, :])
         
         # Multiply the squared component and the A mask
         pT = qkT2 * A_maskTm
@@ -341,7 +500,8 @@ def _attn_bwd_dkdv(dk, dv, da_k,  #
         dv += tl.dot(ppT, do)
         
         # squaremax derivative
-        dsT = A_maskTm * (dpT - tl.sum(dpT * ppT, 0, keep_dims=True))
+        # dsT = A_maskTm * (dpT - tl.sum(dpT * ppT, 0, keep_dims=True))
+        dsT = A_maskTm * (dpT - s[None, :])
         dsT = (dsT).to(tl.float16)
         if MASK:
             dsT = tl.where(mask, dsT, 0.0)
@@ -367,7 +527,7 @@ def _attn_bwd_dkdv(dk, dv, da_k,  #
 # the main inner-loop logic for computing dQ
 @triton.jit
 def _attn_bwd_dqda(dq, da_q, q, K, V, A, Aq,  #
-                 do, m,
+                 do, m, s,
                  # shared by Q/K/V/DO.
                  stride_tok, stride_d,  #
                  H, N_CTX,  #
@@ -416,15 +576,15 @@ def _attn_bwd_dqda(dq, da_q, q, K, V, A, Aq,  #
         dp = tl.dot(do, vT).to(tl.float32)
             
         # squaremax derivative.
-        ds = A_maskm * (dp - tl.sum(dp * p, 1, keep_dims=True))
-        ds = ds.to(tl.float16)
+        # ds = A_maskm * (dp - tl.sum(dp * p, 1, keep_dims=True))
+        ds = A_maskm * (dp - s[:, None])
         if MASK:
             ds = tl.where(mask, ds, 0.0)
             
         # We need to multiply by 2qk and the A mask to handle the square term
-        dqk = 2 * qk.to(tl.float16) * ds
+        dqk = 2 * qk.to(tl.float32) * ds.to(tl.float32)
         # Accumulate dq grads
-        dq += tl.dot(dqk, tl.trans(kT))
+        dq = tl.dot(dqk.to(tl.float32), tl.trans(kT).to(tl.float32), dq)
         
         # Multiply by qk2 to get the da grad
         da = ds * qk2
@@ -442,7 +602,7 @@ def _attn_bwd_dqda(dq, da_q, q, K, V, A, Aq,  #
 def _attn_bwd(Q, K, V, A, sm_scale,  #
               DO,  #
               DQ, DK, DV, DA_Q, DA_K,  #
-              M,
+              M, S,
               # shared by Q/K/V/DO.
               stride_z, stride_h, stride_tok, stride_d,  #
               A_stride_z, A_stride_h, #
@@ -473,6 +633,7 @@ def _attn_bwd(Q, K, V, A, sm_scale,  #
     DA_Q += adj_A
     DA_K += adj_A
     M += off_chz
+    S += off_chz
 
     # load scales
     offs_k = tl.arange(0, HEAD_DIM)
@@ -499,7 +660,7 @@ def _attn_bwd(Q, K, V, A, sm_scale,  #
     dk, dv, da_k = _attn_bwd_dkdv(dk, dv, da_k, #
                             Q, k, v, A, Ak, sm_scale,  #
                             DO,  #
-                            M, #
+                            M, S, #
                             stride_tok, stride_d,  #
                             H, N_CTX,  #
                             MASK_BLOCK_M1, BLOCK_N1, HEAD_DIM,  #
@@ -515,7 +676,7 @@ def _attn_bwd(Q, K, V, A, sm_scale,  #
         dk, dv, da_k,  #
         Q, k, v, A, Ak, sm_scale,  #
         DO,  #
-        M, #
+        M, S, #
         stride_tok, stride_d,  #
         H, N_CTX,  #
         BLOCK_M1, BLOCK_N1, HEAD_DIM,  #
@@ -546,6 +707,8 @@ def _attn_bwd(Q, K, V, A, sm_scale,  #
     m = tl.load(M + offs_m)
     m = m[:, None]
     
+    s = tl.load(S + offs_m)
+    
     # Load the Q part of the A mask which stays in memory
     Aq = tl.load(A + offs_m)
 
@@ -556,7 +719,7 @@ def _attn_bwd(Q, K, V, A, sm_scale,  #
     # structure for dK & dV above as much as possible.
     num_steps = BLOCK_M2 // MASK_BLOCK_N2
     dq, da_q = _attn_bwd_dqda(dq, da_q, q, K, V, A, Aq,  #
-                      do, m, #
+                      do, m, s, #
                       stride_tok, stride_d,  #
                       H, N_CTX,   #
                       BLOCK_M2, MASK_BLOCK_N2, HEAD_DIM,  #
@@ -567,7 +730,7 @@ def _attn_bwd(Q, K, V, A, sm_scale,  #
     # stage 2
     num_steps = end_n // BLOCK_N2
     dq, da_q = _attn_bwd_dqda(dq, da_q, q, K, V, A, Aq,  #
-                      do, m,  #
+                      do, m, s, #
                       stride_tok, stride_d,  #
                       H, N_CTX,  #
                       BLOCK_M2, BLOCK_N2, HEAD_DIM,  #
@@ -672,6 +835,7 @@ class _attention(torch.autograd.Function):
         ctx.sm_scale = sm_scale
         ctx.HEAD_DIM = HEAD_DIM_K
         ctx.causal = causal
+        ctx.warp_specialize = warp_specialize
         return o
 
     @staticmethod
@@ -708,18 +872,41 @@ class _attention(torch.autograd.Function):
         
         PRE_BLOCK = 128
         assert N_CTX % PRE_BLOCK == 0
-        # pre_grid = (N_CTX // PRE_BLOCK, BATCH * N_HEAD)
-        # delta = torch.empty_like(M)
+        pre_grid = (N_CTX // PRE_BLOCK, BATCH * N_HEAD)
+        delta = torch.empty_like(M)
         # _attn_bwd_preprocess[pre_grid](
         #     o, do,  #
         #     delta,  #
         #     BATCH, N_HEAD, N_CTX,  #
         #     BLOCK_M=PRE_BLOCK, HEAD_DIM=ctx.HEAD_DIM  #
         # )
+        HEAD_DIM_K = k.shape[-1]
+        extra_kern_args = {}
+        # Tuning for AMD target
+        if is_hip():
+            waves_per_eu = 3 if HEAD_DIM_K <= 64 else 2
+            extra_kern_args = {"waves_per_eu": waves_per_eu, "allow_flush_denorm": True}
+        if is_blackwell() and ctx.warp_specialize:
+            if HEAD_DIM_K == 128 and q.dtype == torch.float16:
+                extra_kern_args["maxnreg"] = 168
+            else:
+                extra_kern_args["maxnreg"] = 80
+        S = torch.empty((q.shape[0], q.shape[1], q.shape[2]), device=q.device, dtype=torch.float32)
+        _attn_bwd_preprocess_[ctx.grid](
+            ctx.sm_scale, S,  #
+            q.shape[0], q.shape[1],  #
+            q, k, v, do, A_cumsum, M, #
+            N_CTX=q.shape[2],  #
+            HEAD_DIM=HEAD_DIM_K,  #
+            FP8_OUTPUT=q.dtype == torch.float8_e5m2,  #
+            STAGE=3 if ctx.causal else 1,  #
+            warp_specialize=ctx.warp_specialize,  #
+            IS_HOPPER=is_hopper(),  #
+            **extra_kern_args)
         grid = (N_CTX // BLOCK_N1, 1, BATCH * N_HEAD)
         _attn_bwd[grid](
             q, arg_k, v, arg_A_cumsum, ctx.sm_scale, do, dq, dk, dv, dA_q, dA_k,  #
-            M,  #
+            M, S, #
             q.stride(0), q.stride(1), q.stride(2), q.stride(3),  #
             A_cumsum.stride(0), A_cumsum.stride(1),
             N_HEAD, N_CTX,  #
@@ -809,7 +996,7 @@ def test_op(Z, H, N_CTX, HEAD_DIM, causal, warp_specialize, mode, provider, dtyp
     tri_dq, q.grad = q.grad.clone(), None
     tri_da, A_cumsum.grad = A_cumsum.grad.clone(), None
     # compare
-    # torch.testing.assert_close(tri_out, ref_out, atol=1e-2, rtol=0)
+    torch.testing.assert_close(tri_out, ref_out, atol=1e-2, rtol=0)
     rtol = 0.0
     # Relative tolerance workaround for known hardware limitation of CDNA2 GPU.
     # For details see https://pytorch.org/docs/stable/notes/numerical_accuracy.html#reduced-precision-fp16-and-bf16-gemms-and-convolutions-on-amd-instinct-mi200-devices
