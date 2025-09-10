@@ -487,7 +487,7 @@ class LlamaAttention(nn.Module):
                     headdim=64,
                     D_has_hdim = True,
                     rmsnorm=True,
-                    use_mem_eff_path=False
+                    use_mem_eff_path=True # False
                 )
             elif self.attention_type == "gated_softmax_plusplus_mamba":
                 mamba_config = Mamba2Config(

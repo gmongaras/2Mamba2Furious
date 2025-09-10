@@ -24,6 +24,7 @@ from torch.utils.checkpoint import checkpoint
 from einops import rearrange
 from causal_conv1d import causal_conv1d_fn
 from kernel._2Mamba2Furious_square import _attention as _2Mamba2Furious_square
+from Triton_Efficient_Kronecker_Product.kron import kron
 
 
 
@@ -524,6 +525,11 @@ class LlamaAttention(nn.Module):
             self.out_norm = nn.RMSNorm(config.head_dim)
         else:
             self.out_norm = nn.Identity()
+            
+        self.use_efficient = False
+        self.hidden_conv = None
+        self.hidden_num = None
+        self.hidden_denom = None
 
 
 
@@ -585,13 +591,36 @@ class LlamaAttention(nn.Module):
             A = None
 
         # Apply input convolution
-        if self.in_conv:
-            QKV = causal_conv1d_fn(
-                x=QKV.transpose(1, 2).contiguous(),
-                weight=rearrange(self.conv1d.weight, "d 1 w -> d w"),
-                bias=self.conv1d.bias,
-                activation=None,
-            ).transpose(1, 2)
+        if self.use_efficient:
+            if self.in_conv:
+                # Append the previous part of the sequence
+                assert(self.conv1d.weight.shape[-1] == 2, "conv1d dimensions larger than 2 are not supported, but can be easily lol")
+                h_is_none = self.hidden_conv is None
+                if not h_is_none:
+                    QKV = torch.cat([self.hidden_conv, QKV], dim=-2)
+                    
+                # Save the last token
+                self.hidden_conv = QKV[:, -1:].clone()
+                    
+                # Do the conv
+                QKV = causal_conv1d_fn(
+                    x=QKV.transpose(1, 2).contiguous(),
+                    weight=rearrange(self.conv1d.weight, "d 1 w -> d w"),
+                    bias=self.conv1d.bias,
+                    activation=None,
+                ).transpose(1, 2)
+                
+                # Get the last token in the sequence if it's not the first pass
+                if not h_is_none:
+                    QKV = QKV[:, -1:]
+        else:
+            if self.in_conv:
+                QKV = causal_conv1d_fn(
+                    x=QKV.transpose(1, 2).contiguous(),
+                    weight=rearrange(self.conv1d.weight, "d 1 w -> d w"),
+                    bias=self.conv1d.bias,
+                    activation=None,
+                ).transpose(1, 2)
 
         # Get QKV tensors
         query_states = QKV[:, :, :self.q_size]
@@ -697,8 +726,57 @@ class LlamaAttention(nn.Module):
         #     forwrd_gated, query_states.clone().half(), key_states.clone().half(), value_states.clone().half(), attention_mask, self.order_coefficients, self.out_norm, A, use_reentrant=False
         # )
         
-        A_cumsum = A.mT.float().cumsum(-1)
-        attn_output = _2Mamba2Furious_square.apply(query_states.half(), key_states.half(), value_states.half(), A_cumsum.float(), True, 1/math.sqrt(key_states.shape[-1]), False)
+        is_inference = not self.training
+        if is_inference:
+            if self.use_efficient:
+                # If the numerator and denominator are None, we need to compute the hidden state manually
+                if self.hidden_num is None:
+                    # Compute outputs like normal cause it's easy this way
+                    attention_mask = ~torch.tril(torch.ones(query_states.shape[2], query_states.shape[2])).bool().repeat(query_states.shape[0], query_states.shape[1], 1, 1).to(query_states.device)
+                    attn_output = forwrd_gated(query_states, key_states, value_states, attention_mask, self.order_coefficients, self.out_norm, A)
+                    
+                    # self-kronecker for queries and key
+                    # query_states = kron(query_states)
+                    # key_states = kron(key_states)
+                    query_states = (query_states[..., :, None] * query_states[..., None, :]).flatten(-2, -1)
+                    key_states = (key_states[..., :, None] * key_states[..., None, :]).flatten(-2, -1)
+                    
+                    # Compute A values
+                    A = A.mT[..., None].exp()
+                    
+                    # Iterate over sequence and produce hidden state
+                    self.hidden_num = self.hidden_denom = 0
+                    for t in range(0, key_states.shape[-2]):
+                        # Compute next hidden states
+                        A_ = A[:, :, t:t+1]
+                        K = key_states[:, :, t:t+1].mT
+                        V = value_states[:, :, t:t+1]
+                        self.hidden_num = self.hidden_num * A_ + (K @ V)
+                        self.hidden_denom = self.hidden_denom * A_ + K
+                    
+                # If previous hidden states exist, we can reuse them
+                else:
+                    # self-kronecker for queries and key
+                    # query_states = kron(query_states, 1)
+                    # key_states = kron(key_states, 1)
+                    query_states = (query_states[..., :, None] * query_states[..., None, :]).flatten(-2, -1)
+                    key_states = (key_states[..., :, None] * key_states[..., None, :]).flatten(-2, -1)
+                    
+                    # Compute alpha value at current timestep
+                    A = A.mT[..., None].exp()
+                    
+                    # Update hidden states
+                    self.hidden_num = self.hidden_num * A + (key_states.mT @ value_states)
+                    self.hidden_denom = self.hidden_denom * A + key_states.mT
+                    
+                    # Calculate output
+                    attn_output = (query_states @ self.hidden_num) / (query_states @ self.hidden_denom)
+            else:
+                attention_mask = ~torch.tril(torch.ones(query_states.shape[2], query_states.shape[2])).bool().repeat(query_states.shape[0], query_states.shape[1], 1, 1).to(query_states.device)
+                attn_output = forwrd_gated(query_states, key_states, value_states, attention_mask, self.order_coefficients, self.out_norm, A)
+        else:
+            A_cumsum = A.mT.float().cumsum(-1)
+            attn_output = _2Mamba2Furious_square.apply(query_states.half(), key_states.half(), value_states.half(), A_cumsum.float(), True, 1/math.sqrt(key_states.shape[-1]), False)
 
 
 

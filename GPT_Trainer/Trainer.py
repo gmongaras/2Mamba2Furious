@@ -243,6 +243,13 @@ class Trainer():
         # self.padding_side = "right" if attention_type in ["linear_mamba", "linear_rwkv", "gated_softmax_plusplus_mamba", "gated_softmax_plusplus_mamba2"] else "left"
         self.padding_side = "right"
         
+        # Gonna remove the mask for some to reduce memory
+        self.pass_mask = True
+        if "LlamaDecoderLayer7" in LlamaDecoderLayer.__module__ \
+            or "LlamaDecoderLayer8" in LlamaDecoderLayer.__module__ \
+            or (self.attention_type == "attention_type" and LlamaDecoderLayer.__module__ == "GPT_Trainer.LlamaDecoderLayer"):
+                self.pass_mask = False
+        
         
         # Must load a checkpoint if finetuning
         if self.finetune_:
@@ -549,7 +556,7 @@ class Trainer():
             labels = batch["labels"].to(self.model.device)
         
             with torch.autocast(device_type='cuda', dtype=torch.bfloat16) if self.use_amp else nullcontext():
-                outputs = self.model(input_ids, attention_mask=attention_mask).logits
+                outputs = self.model(input_ids, attention_mask=attention_mask if self.pass_mask else None).logits
                 
                 # Mask labels with -100 where the attention mask is 0. Note that the mask needs to be shifted by one to match the labels
                 labels = torch.where(attention_mask, labels, torch.tensor(-100).to(labels.device))

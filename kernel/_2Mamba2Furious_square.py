@@ -315,6 +315,13 @@ def _attn_bwd_preprocess_inner(acc, do, q, A_q, m, #
         
         # Compute qkA
         p = qk2 * A_mask_m
+            
+        # Compute dp = do vT
+        v = desc_v.load([offsetv_y, 0]).T
+        dp = tl.dot(do, v)
+        
+        # scalar-wise multiply dp and normalized p
+        grad = dp * p
         
         # Masking diag and off diag
         if STAGE == 2:
@@ -322,14 +329,7 @@ def _attn_bwd_preprocess_inner(acc, do, q, A_q, m, #
             mask = offs_m[:, None] >= (start_n + offs_n[None, :])
             
             # Mask the attention scores
-            p = tl.where(mask, p, 0)
-            
-        # Compute dp = do vT
-        v = desc_v.load([offsetk_y, 0]).T
-        dp = tl.dot(do, v)
-        
-        # scalar-wise multiply dp and normalized p
-        grad = dp * p
+            grad = tl.where(mask, grad, 0)
         
         # sum and accumulate
         acc += tl.sum(grad, axis=1)
@@ -340,8 +340,6 @@ def _attn_bwd_preprocess_inner(acc, do, q, A_q, m, #
         
     return acc
     
-@triton.autotune(configs=list(filter(keep, configs)), key=["N_CTX", "HEAD_DIM", "FP8_OUTPUT", "warp_specialize"],
-                 prune_configs_by={'early_config_prune': prune_invalid_configs})
 @triton.jit
 def _attn_bwd_preprocess_(sm_scale, S, #
               Z, H, desc_q, desc_k, desc_v, desc_do, desc_A, desc_m, N_CTX,  #
@@ -423,26 +421,6 @@ def _attn_bwd_preprocess_(sm_scale, S, #
     s_ptrs = S + off_hz * N_CTX + offs_m
     tl.store(s_ptrs, acc)
 
-
-# Computes the summation part cause it needs to go over the entire sequence
-# \sum do * o 
-@triton.jit
-def _attn_bwd_preprocess(O, DO,  #
-                         Delta,  #
-                         Z, H, N_CTX,  #
-                         BLOCK_M: tl.constexpr, HEAD_DIM: tl.constexpr  #
-                         ):
-    off_m = tl.program_id(0) * BLOCK_M + tl.arange(0, BLOCK_M)
-    off_hz = tl.program_id(1)
-    off_n = tl.arange(0, HEAD_DIM)
-    # load
-    o = tl.load(O + off_hz * HEAD_DIM * N_CTX + off_m[:, None] * HEAD_DIM + off_n[None, :])
-    do = tl.load(DO + off_hz * HEAD_DIM * N_CTX + off_m[:, None] * HEAD_DIM + off_n[None, :]).to(tl.float32)
-    delta = tl.sum(o * do, axis=1)
-    # write-back
-    tl.store(Delta + off_hz * N_CTX + off_m, delta)
-
-
 # The main inner-loop logic for computing dK and dV.
 @triton.jit
 def _attn_bwd_dkdv(dk, dv, da_k,  #
@@ -495,26 +473,29 @@ def _attn_bwd_dkdv(dk, dv, da_k,  #
         dpT = tl.dot(v, tl.trans(do)).to(tl.float32)
             
         # Compute dV.
-        ppT = pT
-        ppT = ppT.to(tl.float16)
-        dv += tl.dot(ppT, do)
+        pT = pT.to(tl.float16)
+        dv += tl.dot(pT, do)
         
         # squaremax derivative
         # dsT = A_maskTm * (dpT - tl.sum(dpT * ppT, 0, keep_dims=True))
-        dsT = A_maskTm * (dpT - s[None, :])
-        dsT = (dsT).to(tl.float16)
-        if MASK:
-            dsT = tl.where(mask, dsT, 0.0)
+        dsT = A_maskTm.to(tl.float32) * (dpT.to(tl.float32) - s[None, :].to(tl.float32))
+        # dsT = (dsT).to(tl.float16)
         
         # We need to multiply by 2qk and the A mask to handle the square term
-        dqkT = 2 * qkT.to(tl.float16) * dsT
+        dqkT = 2 * qkT.to(tl.float32) * dsT.to(tl.float32)
+        
+        if MASK:
+            dqkT = tl.where(mask, dqkT, 0.0)
+        
         # Accumulate dk grads
-        dk += tl.dot(dqkT, tl.trans(qT)).to(tl.float32)
+        dk = tl.dot(dqkT, tl.trans(qT).to(tl.float32), dk)
         
         # Multiply by qk2 to get the da grad
-        daT = dsT * qkT2
+        daT = dsT.to(tl.float32) * qkT2.to(tl.float32)
+        if MASK:
+            daT = tl.where(mask, daT, 0.0)
         # Accumulate dA grads
-        da_k += -tl.sum(daT, axis=1)
+        da_k += -tl.sum(daT.to(tl.float32), axis=1)
         
         # Add row
         # Increment pointers.
@@ -564,32 +545,41 @@ def _attn_bwd_dqda(dq, da_q, q, K, V, A, Aq,  #
         A_mask = Aq.to(tl.float32)[:, None] - Ak.to(tl.float32)[None, :]
         A_maskm = tl.exp2(A_mask - m)
         
-        # Multiply the squared component and A mask
-        p = qk2 * A_maskm
+        # # Multiply the squared component and A mask
+        # p = qk2 * A_maskm
         
-        # Autoregressive masking.
-        if MASK:
-            mask = (offs_m[:, None] >= offs_n[None, :])
-            p = tl.where(mask, p, 0.0)
+        # # Autoregressive masking.
+        # if MASK:
+        #     mask = (offs_m[:, None] >= offs_n[None, :])
+        #     p = tl.where(mask, p, 0.0)
             
         # Compute dp
         dp = tl.dot(do, vT).to(tl.float32)
             
         # squaremax derivative.
         # ds = A_maskm * (dp - tl.sum(dp * p, 1, keep_dims=True))
-        ds = A_maskm * (dp - s[:, None])
-        if MASK:
-            ds = tl.where(mask, ds, 0.0)
+        ds = A_maskm.to(tl.float32) * (dp.to(tl.float32) - s.to(tl.float32))
+        # if MASK:
+        #     mask = (offs_m[:, None] >= offs_n[None, :])
+        #     ds = tl.where(mask, ds, 0.0)
             
         # We need to multiply by 2qk and the A mask to handle the square term
         dqk = 2 * qk.to(tl.float32) * ds.to(tl.float32)
+        
+        if MASK:
+            mask = (offs_m[:, None] >= offs_n[None, :])
+            dqk = tl.where(mask, dqk, 0.0)
+        
         # Accumulate dq grads
         dq = tl.dot(dqk.to(tl.float32), tl.trans(kT).to(tl.float32), dq)
         
         # Multiply by qk2 to get the da grad
-        da = ds * qk2
+        da = ds.to(tl.float32) * qk2.to(tl.float32)
+        if MASK:
+            mask = (offs_m[:, None] >= offs_n[None, :])
+            da = tl.where(mask, da, 0.0)
         # Accumulate dA grad
-        da_q += tl.sum(da, axis=1)
+        da_q += tl.sum(da.to(tl.float32), axis=1)
         
         # Increment pointers.
         curr_n += step_n
@@ -708,6 +698,7 @@ def _attn_bwd(Q, K, V, A, sm_scale,  #
     m = m[:, None]
     
     s = tl.load(S + offs_m)
+    s = s[:, None]
     
     # Load the Q part of the A mask which stays in memory
     Aq = tl.load(A + offs_m)
@@ -872,8 +863,8 @@ class _attention(torch.autograd.Function):
         
         PRE_BLOCK = 128
         assert N_CTX % PRE_BLOCK == 0
-        pre_grid = (N_CTX // PRE_BLOCK, BATCH * N_HEAD)
-        delta = torch.empty_like(M)
+        # pre_grid = (N_CTX // PRE_BLOCK, BATCH * N_HEAD)
+        # delta = torch.empty_like(M)
         # _attn_bwd_preprocess[pre_grid](
         #     o, do,  #
         #     delta,  #
@@ -891,7 +882,7 @@ class _attention(torch.autograd.Function):
                 extra_kern_args["maxnreg"] = 168
             else:
                 extra_kern_args["maxnreg"] = 80
-        S = torch.empty((q.shape[0], q.shape[1], q.shape[2]), device=q.device, dtype=torch.float32)
+        S = torch.empty_like(M)
         _attn_bwd_preprocess_[ctx.grid](
             ctx.sm_scale, S,  #
             q.shape[0], q.shape[1],  #
@@ -902,6 +893,7 @@ class _attention(torch.autograd.Function):
             STAGE=3 if ctx.causal else 1,  #
             warp_specialize=ctx.warp_specialize,  #
             IS_HOPPER=is_hopper(),  #
+            BLOCK_M=BLOCK_M2, BLOCK_N=BLOCK_N2,
             **extra_kern_args)
         grid = (N_CTX // BLOCK_N1, 1, BATCH * N_HEAD)
         _attn_bwd[grid](
