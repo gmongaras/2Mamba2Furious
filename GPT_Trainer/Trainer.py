@@ -697,8 +697,8 @@ class Trainer():
             
             
             
-            # if step % self.num_save_steps == 0:
-            #     self.save_model(step)
+            if step % self.num_save_steps == 0:
+                self.save_model(step)
                 
                 
                 
@@ -713,7 +713,7 @@ class Trainer():
 
 
             # Testing the model
-            if step % self.num_steps_test == 0 and step > 10 and self.test_loss or True:
+            if step % self.num_steps_test == 0 and step > 10 and self.test_loss:
                 with torch.no_grad():
                     # Put model in eval mode
                     self.model.eval()

@@ -49,8 +49,8 @@ def main():
 
     
     # Load in a checkpoint
-    load_checkpoint = True
-    checkpoint_path = "models/Ker_8192L_Medium_2P_NoPE_Conv_AMask_AMaskTypeNEGSOFTPLUS_NOAMaskBias_AMaskValueDiscretizationDT_SMNorm_/"
+    load_checkpoint = False
+    checkpoint_path = "models/Ker_8192L_Medium_2P_NoPE_Conv_AMask_AMaskTypeNEGSOFTPLUS_NOAMaskBias_AMaskValueDiscretizationDT_SMNorm/"
 
 
     
