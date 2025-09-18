@@ -63,31 +63,25 @@ def _attn_fwd_inner(acc, l_i, m_i, q, A_q,  #
         
         # Squared inner product on q and k
         qk = qk.to(tl.float32) * qk_scale
-        qk2 = qk * qk 
+        # qk2 = qk * qk 
         
-        # Masking diag and off diag
         if STAGE == 2:
-            # Get mask
+            # Get mask if we are on-diag
             mask = offs_m[:, None] >= (start_n + offs_n[None, :])
             
-            # Get max
-            m_ij = tl.maximum(m_i, tl.max(qk, 1))
-            
-            # Subtract min from A mask and calculate exponentate the A mask
-            A_mask_m = tl.exp2(A_mask - m_ij[:, None])
-            
-            # Compute qkA and mask
-            qkA = qk2 * A_mask_m
-            p = tl.where(mask, qkA, 0)
-        else:
-            # Get max
-            m_ij = tl.maximum(m_i, tl.max(qk, 1))
-            
-            # Subtract min from A mask and calculate exponentate the A mask
-            A_mask_m = tl.exp2(A_mask - m_ij[:, None])
-            
-            # Compute qkA
-            p = qk2 * A_mask_m
+            # Mask upper triangle
+            qk = tl.where(mask, qk, 0)
+        
+        # Get max
+        m_ij = tl.maximum(m_i, tl.max(qk, 1))
+        
+        # Subtract max from A mask and calculate exponentate the A mask
+        A_mask_m = A_mask - m_ij[:, None]
+        A_mask_m = tl.where(A_mask_m < 32, A_mask_m, 32) # Don't let values get too large
+        A_mask_m = tl.exp2(A_mask_m)
+        
+        # A_mask * qk**2
+        p = qk * qk * A_mask_m
         
         # -- compute correction factor
         alpha = tl.math.exp2(m_i - m_ij)
@@ -108,7 +102,6 @@ def _attn_fwd_inner(acc, l_i, m_i, q, A_q,  #
             v = desc_v.load([0, offsetv_y]).T
         else:
             v = desc_v.load([offsetv_y, 0])
-        p = p
         # note that this non transposed v for FP8 is only supported on Blackwell
         acc = tl.dot(p, v.to(tl.float32), acc)
         # update m_i and l_i
@@ -1013,6 +1006,12 @@ if __name__ == "__main__":
     #     mode="fwd",
     #     provider="triton-fp16",
     # )
+    
+    q = torch.load("queries.pt").cuda().half()
+    k = torch.load("keys.pt").cuda().half()
+    v = torch.load("values.pt").cuda().half()
+    A_cumsum = torch.load("A_cumsum.pt").cuda().half()
+    out = attention(q, k, v, A_cumsum, True, 0.125, False).half()
 
     test_op(
         16,

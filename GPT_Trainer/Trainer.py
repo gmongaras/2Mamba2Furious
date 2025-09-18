@@ -11,6 +11,8 @@ import math
 
 from torch.nn.parallel import DistributedDataParallel as DDP
 import torch.distributed as dist
+from torch.utils.data import DataLoader, DistributedSampler
+from datetime import timedelta
 
 try:
     from GPT_Trainer.multi_gpu_helpers import is_main_process
@@ -45,7 +47,8 @@ def init_distributed():
                 init_method=dist_url,
                 world_size=world_size,
                 device_id=torch.device(f"cuda:{local_rank}"),
-                rank=rank)
+                rank=rank, 
+                timeout=timedelta(seconds=1800))
     # Use the gloo backend if nccl isn't supported
     except RuntimeError:
         dist.init_process_group(
@@ -53,7 +56,8 @@ def init_distributed():
                 init_method=dist_url,
                 world_size=world_size,
                 device_id=torch.device(f"cuda:{local_rank}"),
-                rank=rank)
+                rank=rank,
+                timeout=timedelta(seconds=1800))
 
     # this will make all .cuda() calls work properly
     torch.cuda.set_device(local_rank)
@@ -121,6 +125,32 @@ def get_model(model_size, model_max_length, vocab_size, attention_type):
             "num_hidden_layers": 20,
             "num_key_value_heads": 16,
             # "num_key_value_heads": 2,
+            "pretraining_tp": 1,
+            "rms_norm_eps": 1e-05,
+            "rope_scaling": None,
+            "tie_word_embeddings": False,
+            "torch_dtype": "float16",
+            "use_cache": True,
+            "vocab_size": vocab_size,
+            "attention_type": attention_type,
+        }))
+    elif model_size == "medium":
+        return transformers.LlamaForCausalLM(config=transformers.LlamaConfig.from_dict({
+            "_name_or_path": "meta-llama/Llama-2-7b-hf",
+            "architectures": [
+                "LlamaForCausalLM"
+            ],
+            "bos_token_id": 1,
+            "eos_token_id": 2,
+            "hidden_act": "silu",
+            "hidden_size": 1024+512,
+            "initializer_range": 0.02,
+            "intermediate_size": 1024*3,
+            "max_position_embeddings": model_max_length,
+            "model_type": "llama",
+            "num_attention_heads": 24,
+            "num_hidden_layers": 30,
+            "num_key_value_heads": 24,
             "pretraining_tp": 1,
             "rms_norm_eps": 1e-05,
             "rope_scaling": None,
@@ -247,7 +277,7 @@ class Trainer():
         self.pass_mask = True
         if "LlamaDecoderLayer7" in LlamaDecoderLayer.__module__ \
             or "LlamaDecoderLayer8" in LlamaDecoderLayer.__module__ \
-            or (self.attention_type == "attention_type" and LlamaDecoderLayer.__module__ == "GPT_Trainer.LlamaDecoderLayer"):
+            or (attention_type == "attention_type" and LlamaDecoderLayer.__module__ == "GPT_Trainer.LlamaDecoderLayer"):
                 self.pass_mask = False
         
         
@@ -264,6 +294,7 @@ class Trainer():
         
         # Divide the batch size by the number of GPUs
         if dev != "cpu":
+            print(f"world size: {int(os.environ['WORLD_SIZE'])}")
             batch_size = batch_size // int(os.environ['WORLD_SIZE'])
         else:
             batch_size = batch_size
@@ -324,6 +355,18 @@ class Trainer():
                 except KeyError:
                     local_rank = 0
                     print("LOCAL_RANK not found in environment variables. Defaulting to 0.")
+                    
+                try:
+                    self.rank = int(os.environ['RANK'])
+                except KeyError:
+                    self.rank = 0
+                    print("RANK not found in environment variables. Defaulting to 0.")
+                    
+                try:
+                    self.world_size = int(os.environ['WORLD_SIZE'])
+                except KeyError:
+                    self.world_size = 0
+                    print("WORLD_SIZE not found in environment variables. Defaulting to 0.")
 
                 self.model = DDP(self.model.cuda(), device_ids=[local_rank], find_unused_parameters=False)
             else:
@@ -494,10 +537,25 @@ class Trainer():
             data_split = self.dataset_.train_test_split(test_size=self.test_per, seed=123)
             self.dataset_ = data_split["train"]
             self.dataset_test = data_split["test"]
-        
+            
         # Convert data to torch
         self.dataset_.set_format(type="torch", columns=["text"])
         self.dataset_test.set_format(type="torch", columns=["text"])
+            
+        # The test dataset can be split among the GPUs
+        # block_size = (self.dataset_test.num_rows // self.world_size)
+        # num_blocks = self.world_size
+        # total_size = block_size * num_blocks
+        # idxs = torch.arange(0, total_size)
+        # idxs = idxs[block_size*self.rank:block_size*(self.rank+1)]
+        # self.dataset_test = self.dataset_test.select(idxs)
+        self.dataset_test_sampler = DistributedSampler(
+            self.dataset_test,
+            num_replicas=self.world_size,
+            rank=self.rank,
+            shuffle=True,
+            drop_last=True
+        )
         
         # PyTorch random sampler
         random_sampler = torch.utils.data.RandomSampler(self.dataset_, replacement=True, num_samples=(num_steps-step_shift)*self.batch_size)
@@ -639,8 +697,8 @@ class Trainer():
             
             
             
-            if step % self.num_save_steps == 0:
-                self.save_model(step)
+            # if step % self.num_save_steps == 0:
+            #     self.save_model(step)
                 
                 
                 
@@ -655,15 +713,15 @@ class Trainer():
 
 
             # Testing the model
-            if step % self.num_steps_test == 0 and step > 10 and self.test_loss:
+            if step % self.num_steps_test == 0 and step > 10 and self.test_loss or True:
                 with torch.no_grad():
                     # Put model in eval mode
                     self.model.eval()
 
                     # Create sampler and datalaoder
                     test_data_loader = torch.utils.data.DataLoader(
-                        self.dataset_test,
-                        shuffle=True,
+                        dataset=self.dataset_test,
+                        sampler=self.dataset_test_sampler,
                         batch_size=self.batch_size, 
                         collate_fn=lambda x: x,
                         
@@ -671,6 +729,7 @@ class Trainer():
                         prefetch_factor=10,
                         persistent_workers=True,
                     )
+                    self.dataset_test_sampler.set_epoch(step)
 
                     # Average loss and ppl
                     avg_test_loss = 0
@@ -708,16 +767,25 @@ class Trainer():
                     # Get the averages
                     avg_test_loss /= total_batches
                     avg_test_ppl /= total_batches
+                    
+                    # Average the loss over ranks
+                    avg_test_loss = torch.tensor(avg_test_loss).cuda()
+                    avg_test_ppl = torch.tensor(avg_test_ppl).cuda()
+                    dist.all_reduce(avg_test_loss, op=dist.ReduceOp.SUM)
+                    dist.all_reduce(avg_test_ppl, op=dist.ReduceOp.SUM)
+                    world_size = dist.get_world_size()
+                    avg_test_loss /= world_size
+                    avg_test_ppl /= world_size
 
                     # Log to wandb 
                     if is_main_process():
                         wandb.log({
-                            "test_loss": avg_test_loss,
-                            "test_perplexity": avg_test_ppl,
+                            "test_loss": avg_test_loss.item(),
+                            "test_perplexity": avg_test_ppl.item(),
                         },
                         step=step)
 
-                    del test_data_loader
+                    del test_data_loader, input_ids, attention_mask, labels, loss, outputs
 
                     # Put model in train mode
                     self.model.train()
@@ -826,6 +894,18 @@ class Trainer():
                 except KeyError:
                     local_rank = 0
                     print("LOCAL_RANK not found in environment variables. Defaulting to 0.")
+                    
+                try:
+                    self.rank = int(os.environ['RANK'])
+                except KeyError:
+                    self.rank = 0
+                    print("RANK not found in environment variables. Defaulting to 0.")
+                    
+                try:
+                    self.world_size = int(os.environ['WORLD_SIZE'])
+                except KeyError:
+                    self.world_size = 0
+                    print("WORLD_SIZE not found in environment variables. Defaulting to 0.")
 
                 self.model = DDP(self.model.cuda(), device_ids=[local_rank], find_unused_parameters=False)
                 self.model_ref = self.model.module

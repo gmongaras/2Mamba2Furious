@@ -83,6 +83,7 @@ def infer():
         model.model.layers[i] = LlamaDecoderLayer(model.config, layer_idx=i).to(layer.self_attn.q_proj.weight.device)
         model.model.layers[i].self_attn.layer_num = i
         model.model.layers[i].self_attn.use_efficient = use_efficient
+        model.model.layers[i].self_attn.is_inference = True
         del old
 
     # Load in params
@@ -104,8 +105,8 @@ def infer():
     # tokenizer = torch.load(os.path.join(model_path, "tokenizer.pt"))  
             
     # inference
-    sentence = "Tell me about Ravens.\nRav"
-    # sentence = "The best bat in February is not always the best bat in June MLB Draft. Projection is a fickle thing and scouts are often divided on"
+    # sentence = "Tell me about Ravens.\n"
+    sentence = "The best bat in February is not always the best bat in June MLB Draft. Projection is a fickle thing and scouts are often divided on"
     
     
     # Tokenize the sentence
@@ -142,7 +143,7 @@ def infer():
         dist = torch.distributions.Categorical(logits=logits)
         next_word = dist.sample()
         # next_word = logits.argmax(-1)
-        if next_word == 50256:
+        if next_word == tokenizer.eos_token_id:
             break
         
         # Add the next word to the input

@@ -526,10 +526,12 @@ class LlamaAttention(nn.Module):
         else:
             self.out_norm = nn.Identity()
             
+        # For inference time
         self.use_efficient = False
         self.hidden_conv = None
         self.hidden_num = None
         self.hidden_denom = None
+        self.is_inference = False
 
 
 
@@ -594,7 +596,7 @@ class LlamaAttention(nn.Module):
         if self.use_efficient:
             if self.in_conv:
                 # Append the previous part of the sequence
-                assert(self.conv1d.weight.shape[-1] == 2, "conv1d dimensions larger than 2 are not supported, but can be easily lol")
+                assert self.conv1d.weight.shape[-1] == 2, "conv1d dimensions larger than 2 are not supported, but can be easily lol"
                 h_is_none = self.hidden_conv is None
                 if not h_is_none:
                     QKV = torch.cat([self.hidden_conv, QKV], dim=-2)
@@ -726,7 +728,7 @@ class LlamaAttention(nn.Module):
         #     forwrd_gated, query_states.clone().half(), key_states.clone().half(), value_states.clone().half(), attention_mask, self.order_coefficients, self.out_norm, A, use_reentrant=False
         # )
         
-        is_inference = not self.training
+        is_inference = self.is_inference
         if is_inference:
             if self.use_efficient:
                 # If the numerator and denominator are None, we need to compute the hidden state manually
@@ -735,11 +737,14 @@ class LlamaAttention(nn.Module):
                     attention_mask = ~torch.tril(torch.ones(query_states.shape[2], query_states.shape[2])).bool().repeat(query_states.shape[0], query_states.shape[1], 1, 1).to(query_states.device)
                     attn_output = forwrd_gated(query_states, key_states, value_states, attention_mask, self.order_coefficients, self.out_norm, A)
                     
+                    # Multiply keys by scale factor
+                    key_states = key_states * (1/math.sqrt(key_states.shape[-1]))
+                    
                     # self-kronecker for queries and key
-                    # query_states = kron(query_states)
-                    # key_states = kron(key_states)
-                    query_states = (query_states[..., :, None] * query_states[..., None, :]).flatten(-2, -1)
-                    key_states = (key_states[..., :, None] * key_states[..., None, :]).flatten(-2, -1)
+                    query_states = kron(query_states.float())
+                    key_states = kron(key_states.float())
+                    # query_states = (query_states[..., :, None] * query_states[..., None, :]).flatten(-2, -1)
+                    # key_states = (key_states[..., :, None] * key_states[..., None, :]).flatten(-2, -1)
                     
                     # Compute A values
                     A = A.mT[..., None].exp()
@@ -756,11 +761,14 @@ class LlamaAttention(nn.Module):
                     
                 # If previous hidden states exist, we can reuse them
                 else:
+                    # Multiply keys by scale factor
+                    key_states = key_states * (1/math.sqrt(key_states.shape[-1]))
+                    
                     # self-kronecker for queries and key
-                    # query_states = kron(query_states, 1)
-                    # key_states = kron(key_states, 1)
-                    query_states = (query_states[..., :, None] * query_states[..., None, :]).flatten(-2, -1)
-                    key_states = (key_states[..., :, None] * key_states[..., None, :]).flatten(-2, -1)
+                    query_states = kron(query_states, 1)
+                    key_states = kron(key_states, 1)
+                    # query_states = (query_states[..., :, None] * query_states[..., None, :]).flatten(-2, -1)
+                    # key_states = (key_states[..., :, None] * key_states[..., None, :]).flatten(-2, -1)
                     
                     # Compute alpha value at current timestep
                     A = A.mT[..., None].exp()
@@ -854,7 +862,7 @@ class LlamaDecoderLayer(nn.Module):
         residual = hidden_states
         hidden_states = self.post_attention_layernorm(hidden_states)
         hidden_states = checkpoint(
-            self.mlp, hidden_states
+            self.mlp, hidden_states, use_reentrant=True
         )
         hidden_states = residual + hidden_states
 
