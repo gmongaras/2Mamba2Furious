@@ -39,12 +39,12 @@ def is_hopper():
 
 
 @triton.jit(debug=DEBUG)
-def _attn_fwd_inner(acc, l_i, m_i, q, A_q,  #
+def _attn_fwd_inner(acc, q, A_q,  #
                     desc_k, desc_v, desc_A_k, #
                     qo_offset_y, offset_y, dtype: tl.constexpr, start_m, qk_scale,  #
                     BLOCK_M: tl.constexpr, HEAD_DIM: tl.constexpr, BLOCK_N: tl.constexpr,  #
                     STAGE: tl.constexpr, offs_m: tl.constexpr, offs_n: tl.constexpr,  #
-                    N_CTX: tl.constexpr, warp_specialize: tl.constexpr, IS_HOPPER: tl.constexpr):
+                    N_CTX: tl.constexpr, warp_specialize: tl.constexpr, FUNCTION: tl.constexpr, IS_HOPPER: tl.constexpr):
     # range of values handled by this stage
     if STAGE == 1:
         lo, hi = 0, start_m * BLOCK_M
@@ -70,8 +70,14 @@ def _attn_fwd_inner(acc, l_i, m_i, q, A_q,  #
         A_k = desc_A_k.load([offsetk_y])
         A_mask = (A_q[:, None] - A_k[None, :]).to(tl.float32)
         
-        # Squared inner product on q and k
+        # Multiply by qk scale
         qk = qk * qk_scale
+        
+        # Apply activation function
+        if FUNCTION == "squared":
+            qk = qk * qk
+        elif FUNCTION == "exp":
+            qk = tl.exp(qk)
         
         # Mask qk inner product if causal
         if STAGE == 2:
@@ -80,51 +86,25 @@ def _attn_fwd_inner(acc, l_i, m_i, q, A_q,  #
             # Mask upper triangle
             qk = tl.where(mask, qk, 0)
         
-        # Get qk max
-        m_ij = tl.maximum(m_i, tl.max(qk, 1))
-        m_ij = tl.where(m_ij > 32, 32, m_ij) # Large max values can be problematic
-        
-        # Subtract max from A mask and calculate exponentate the A mask
-        A_mask_m = (A_mask - m_ij[:, None]).to(tl.float32)
-        # if CLAMP_FWD:
-        #     A_mask_m = tl.clamp(A_mask_m, CLAMP_MIN, CLAMP_MAX) # Don't let values get too small or too large
-        # A_mask_m = tl.exp2(A_mask_m)
-        A_mask_m = tl.where(A_mask_m < -1024, 0.0, tl.exp2(A_mask_m)) # Mask where pre exp was less than -1024 to zero
+        A_mask = tl.where(A_mask < -1024, 0.0, tl.exp2(A_mask)) # Mask where pre exp was less than -1024 to zero
         if STAGE == 2:
             # Mask upper triangle
-            A_mask_m = tl.where(mask, A_mask_m, 0)
+            A_mask = tl.where(mask, A_mask, 0)
         
-        # A_mask * qk**2
-        p = qk * qk * A_mask_m
-        
-        # Compute the correction factor. This will change things from using
-        # a max of m_i (previous blocks) to m_ij (current block).
-        # It will be 1 if m_i = m_ij meaning the max didn't change
-        alpha = tl.math.exp2(m_i - m_ij)
-        
-        # Update output accumulator with the correct max value
-        acc = acc * alpha[:, None]
+        # A_mask * qk
+        p = qk * A_mask
         
         # prepare p and v for the dot
         v = desc_v.load([offsetv_y, 0])
         
         # Inner product with v to get output (without denominator. That will be applied
         # after the entire block sum is computed via the l sum tensor)
-        acc = tl.dot(p, v.to(tl.float32), acc)
-        
-        # Compute denominator value
-        l_ij = tl.sum(p, 1)
-        # Update the denominator by adding all past values with this block
-        # and updating the denominator with the correct max value
-        l_i = l_i * alpha + l_ij
-        
-        # Update the max value along blocks
-        m_i = m_ij
+        acc = tl.dot(p.to(tl.float16), v.to(tl.float16), acc)
         
         # Update pointers
         offsetk_y += BLOCK_N
         offsetv_y += BLOCK_N
-    return acc, l_i, m_i
+    return acc
 
 
 def _host_descriptor_pre_hook(nargs):
@@ -188,7 +168,7 @@ def _maybe_make_tensor_desc(desc_or_ptr, shape, strides, block_shape):
 @triton.autotune(configs=list(filter(keep, configs)), key=["N_CTX", "HEAD_DIM", "FP8_OUTPUT", "warp_specialize"],
                  prune_configs_by={'early_config_prune': prune_invalid_configs})
 @triton.jit(debug=DEBUG)
-def _attn_fwd(sm_scale, M, #
+def _attn_fwd(sm_scale, #
               Z, H, desc_q, desc_k, desc_v, desc_o, desc_A, N_CTX,  #
               HEAD_DIM: tl.constexpr,  #
               BLOCK_M: tl.constexpr,  #
@@ -196,6 +176,7 @@ def _attn_fwd(sm_scale, M, #
               FP8_OUTPUT: tl.constexpr,  #
               STAGE: tl.constexpr,  #
               warp_specialize: tl.constexpr,  #
+              FUNCTION: tl.constexpr,
               IS_HOPPER: tl.constexpr,  #
               ):
     dtype = tl.float8e5 if FP8_OUTPUT else tl.float16
@@ -228,9 +209,7 @@ def _attn_fwd(sm_scale, M, #
     # initialize offsets
     offs_m = start_m * BLOCK_M + tl.arange(0, BLOCK_M)
     offs_n = tl.arange(0, BLOCK_N)
-    # initialize pointer to m and l
-    m_i = tl.zeros([BLOCK_M], dtype=tl.float32) - float("inf")
-    l_i = tl.zeros([BLOCK_M], dtype=tl.float32) + 1.0
+    # Initialize output
     acc = tl.zeros([BLOCK_M, HEAD_DIM], dtype=tl.float32)
     # load scales
     qk_scale = sm_scale
@@ -244,20 +223,20 @@ def _attn_fwd(sm_scale, M, #
     # For causal = True, STAGE = 3 and _attn_fwd_inner gets 1 as its STAGE
     # For causal = False, STAGE = 1, and _attn_fwd_inner gets 3 as its STAGE
     if STAGE & 1:
-        acc, l_i, m_i = _attn_fwd_inner(acc, l_i, m_i, q, A_q,  #
+        acc = _attn_fwd_inner(acc, q, A_q,  #
                                         desc_k, desc_v, desc_A_k, #
                                         qo_offset_y, offset_y, dtype, start_m, qk_scale,  #
                                         BLOCK_M, HEAD_DIM, BLOCK_N,  #
                                         4 - STAGE, offs_m, offs_n, N_CTX,  #
-                                        warp_specialize, IS_HOPPER)
+                                        warp_specialize, FUNCTION, IS_HOPPER)
     # stage 2: on-band
     if STAGE & 2:
-        acc, l_i, m_i = _attn_fwd_inner(acc, l_i, m_i, q, A_q,  #
+        acc = _attn_fwd_inner(acc, q, A_q,  #
                                         desc_k, desc_v, desc_A_k, #
                                         qo_offset_y, offset_y, dtype, start_m, qk_scale,  #
                                         BLOCK_M, HEAD_DIM, BLOCK_N,  #
                                         2, offs_m, offs_n, N_CTX,  #
-                                        warp_specialize, IS_HOPPER)
+                                        warp_specialize, FUNCTION, IS_HOPPER)
     # epilogue
     
     # m_i during the loop is the max value across rows.
@@ -265,12 +244,6 @@ def _attn_fwd(sm_scale, M, #
     # added. This way when we do 2^{... - m_i}, we are doing two things.
     # This first is subtracting the min for stability. The second is
     # 2^{-log2(li)} = 1/l_i effectively does the denominator.
-    m_i += tl.math.log2(l_i)
-    
-    # Divide by the denominator
-    acc = acc / l_i[:, None]
-    m_ptrs = M + off_hz * N_CTX + offs_m
-    tl.store(m_ptrs, m_i)
     desc_o.store([qo_offset_y, 0], acc.to(dtype))
     
     
@@ -280,169 +253,13 @@ def _attn_fwd(sm_scale, M, #
     
     
     
-    
-@triton.jit(debug=DEBUG)
-def _attn_bwd_preprocess_inner(acc, do, q, A_q, m, #
-                    desc_k, desc_v, desc_A_k, #
-                    qo_offset_y, offset_y, dtype: tl.constexpr, start_m, qk_scale,  #
-                    BLOCK_M: tl.constexpr, HEAD_DIM: tl.constexpr, BLOCK_N: tl.constexpr,  #
-                    STAGE: tl.constexpr, offs_m: tl.constexpr, offs_n: tl.constexpr,  #
-                    N_CTX: tl.constexpr, warp_specialize: tl.constexpr, IS_HOPPER: tl.constexpr):
-    # range of values handled by this stage
-    if STAGE == 1:
-        lo, hi = 0, start_m * BLOCK_M
-    elif STAGE == 2:
-        lo, hi = start_m * BLOCK_M, (start_m + 1) * BLOCK_M
-        lo = tl.multiple_of(lo, BLOCK_M)
-    # causal = False
-    else:
-        lo, hi = 0, N_CTX
-    offsetk_y = offset_y + lo
-    if dtype == tl.float8e5:
-        offsetv_y = offset_y * HEAD_DIM + lo
-    else:
-        offsetv_y = offset_y + lo
-    # loop over k, v and update accumulator
-    for start_n in tl.range(lo, hi, BLOCK_N, warp_specialize=warp_specialize):
-        start_n = tl.multiple_of(start_n, BLOCK_N)
-        # -- compute qk ----
-        kT = desc_k.load([offsetk_y, 0]).T
-        qk = tl.dot(q.to(tl.float32), kT.to(tl.float32))
-        
-        # Compute A mask
-        A_k = desc_A_k.load([offsetk_y])
-        A_mask = (A_q[:, None] - A_k[None, :]).to(tl.float32)
-        
-        # Inner product on q and k
-        qk = qk * qk_scale
-        
-        
-        
-        # Subtractax from A mask and calculate exponentate the A mask
-        # This also applies the denominator
-        A_mask_m = A_mask
-        if CLAMP_GRADS:
-            A_mask_m = tl.clamp(A_mask_m, CLAMP_MIN, CLAMP_MAX) # Don't let values get too small or too large
-        A_mask_m = tl.where(A_mask_m < -1024, 0.0, tl.exp2(A_mask_m)) # Mask where pre exp was less than -1024 to zero
-        # A_mask_m = tl.exp2(A_mask_m)
-        
-        # Compute qkA
-        p = qk * qk * A_mask_m
-            
-        # Compute dp = do vT
-        vT = desc_v.load([offsetv_y, 0]).T
-        dp = tl.dot(do, vT)
-        
-        # scalar-wise multiply dp and normalized p
-        grad = dp * p
-        
-        # Masking diag and off diag
-        if STAGE == 2:
-            # Get mask
-            mask = offs_m[:, None] >= (start_n + offs_n[None, :])
-            
-            # Mask the attention scores
-            grad = tl.where(mask, grad, 0)
-        
-        # sum and accumulate
-        acc += tl.sum(grad, axis=1)
-        
-        # Step offsets
-        offsetk_y += BLOCK_N
-        offsetv_y += BLOCK_N
-        
-    return acc
-    
-@triton.jit(debug=DEBUG)
-def _attn_bwd_preprocess_(sm_scale, S, #
-              Z, H, desc_q, desc_k, desc_v, desc_do, desc_A, desc_m, N_CTX,  #
-              HEAD_DIM: tl.constexpr,  #
-              BLOCK_M: tl.constexpr,  #
-              BLOCK_N: tl.constexpr,  #
-              FP8_OUTPUT: tl.constexpr,  #
-              STAGE: tl.constexpr,  #
-              warp_specialize: tl.constexpr,  #
-              IS_HOPPER: tl.constexpr,  #
-              ):
-    dtype = tl.float8e5 if FP8_OUTPUT else tl.float16
-    tl.static_assert(BLOCK_N <= HEAD_DIM)
-    start_m = tl.program_id(0)
-    off_hz = tl.program_id(1)
-    off_z = off_hz // H
-    off_h = off_hz % H
 
-    y_dim = Z * H * N_CTX
-    desc_q = _maybe_make_tensor_desc(desc_q, shape=[y_dim, HEAD_DIM], strides=[HEAD_DIM, 1],
-                                     block_shape=[BLOCK_M, HEAD_DIM])
-    if FP8_OUTPUT:
-        desc_v = _maybe_make_tensor_desc(desc_v, shape=[HEAD_DIM, y_dim], strides=[N_CTX, 1],
-                                         block_shape=[HEAD_DIM, BLOCK_N])
-    else:
-        desc_v = _maybe_make_tensor_desc(desc_v, shape=[y_dim, HEAD_DIM], strides=[HEAD_DIM, 1],
-                                         block_shape=[BLOCK_N, HEAD_DIM])
-    desc_k = _maybe_make_tensor_desc(desc_k, shape=[y_dim, HEAD_DIM], strides=[HEAD_DIM, 1],
-                                     block_shape=[BLOCK_N, HEAD_DIM])
-    desc_do = _maybe_make_tensor_desc(desc_do, shape=[y_dim, HEAD_DIM], strides=[HEAD_DIM, 1],
-                                     block_shape=[BLOCK_M, HEAD_DIM])
-    desc_A_q = _maybe_make_tensor_desc(desc_A, shape=[y_dim], strides=[1],
-                                     block_shape=[BLOCK_M])
-    desc_A_k = _maybe_make_tensor_desc(desc_A, shape=[y_dim], strides=[1],
-                                     block_shape=[BLOCK_N])
-    desc_m = _maybe_make_tensor_desc(desc_m, shape=[y_dim], strides=[1],
-                                     block_shape=[BLOCK_M])
-
-    offset_y = off_z * (N_CTX * H) + off_h * N_CTX
-    qo_offset_y = offset_y + start_m * BLOCK_M
-    # initialize offsets
-    offs_m = start_m * BLOCK_M + tl.arange(0, BLOCK_M)
-    offs_n = tl.arange(0, BLOCK_N)
-    # Initialize output
-    acc = tl.zeros([BLOCK_M], dtype=tl.float32)
-    # load scales
-    qk_scale = sm_scale
-    # qk_scale *= 1.44269504  # 1/ln(2)
-    # Note that this converts a base 2 exp via: e^A = 2^(A*log_2(e)) = 2^(A*(1/ln(2)))
-    # load q: it will stay in SRAM throughout
-    q = desc_q.load([qo_offset_y, 0])
-    # Load in do
-    do = desc_do.load([qo_offset_y, 0])
-    # Load in the max values
-    m = desc_m.load([qo_offset_y])
-    # Load A_Q
-    A_q = desc_A_q.load([qo_offset_y])
-    # stage 1: off-band
-    # For causal = True, STAGE = 3 and _attn_fwd_inner gets 1 as its STAGE
-    # For causal = False, STAGE = 1, and _attn_fwd_inner gets 3 as its STAGE
-    if STAGE & 1:
-        acc = _attn_bwd_preprocess_inner(acc, do, q, A_q, m,  #
-                                        desc_k, desc_v, desc_A_k, #
-                                        qo_offset_y, offset_y, dtype, start_m, qk_scale,  #
-                                        BLOCK_M, HEAD_DIM, BLOCK_N,  #
-                                        4 - STAGE, offs_m, offs_n, N_CTX,  #
-                                        warp_specialize, IS_HOPPER)
-    # stage 2: on-band
-    if STAGE & 2:
-        acc = _attn_bwd_preprocess_inner(acc, do, q, A_q, m,  #
-                                        desc_k, desc_v, desc_A_k, #
-                                        qo_offset_y, offset_y, dtype, start_m, qk_scale,  #
-                                        BLOCK_M, HEAD_DIM, BLOCK_N,  #
-                                        2, offs_m, offs_n, N_CTX,  #
-                                        warp_specialize, IS_HOPPER)
-    # epilogue
-    
-    # Divide the accumulation tensor by the denominator
-    acc = acc * tl.exp2(-m)
-    
-    # Store output
-    s_ptrs = S + off_hz * N_CTX + offs_m
-    tl.store(s_ptrs, acc)
 
 # The main inner-loop logic for computing dK and dV.
 @triton.jit(debug=DEBUG)
 def _attn_bwd_dkdv(dk, dv, da_k,  #
                    Q, k, v, A, Ak, sm_scale,  #
                    DO,  #
-                   M, S, #
                    # shared by Q/K/V/DO.
                    stride_tok, stride_d,  #
                    H, N_CTX, BLOCK_M1: tl.constexpr,  #
@@ -450,7 +267,8 @@ def _attn_bwd_dkdv(dk, dv, da_k,  #
                    HEAD_DIM: tl.constexpr,  #
                    # Filled in by the wrapper.
                    start_n, start_m, num_steps,  #
-                   MASK: tl.constexpr):
+                   MASK: tl.constexpr,
+                   FUNCTION: tl.constexpr,):
     offs_m = start_m + tl.arange(0, BLOCK_M1)
     offs_n = start_n + tl.arange(0, BLOCK_N1)
     offs_k = tl.arange(0, HEAD_DIM)
@@ -464,58 +282,69 @@ def _attn_bwd_dkdv(dk, dv, da_k,  #
         qT = tl.load(qT_ptrs)
         # Load m before computing qk to reduce pipeline stall.
         offs_m = curr_m + tl.arange(0, BLOCK_M1)
-        m = tl.load(M + offs_m)
-        s = tl.load(S + offs_m)
-        
-        # Compute qk**2
-        qkT = tl.dot(k.to(tl.float32), qT.to(tl.float32))
-        qkT2 = qkT * qkT
         
         # Compute the A mask and exponentiate the negative max
         # which also gives the denominator
         Aq = tl.load(A + offs_m)
-        A_maskTm = Aq.to(tl.float32)[None, :] - Ak.to(tl.float32)[:, None] - m[None, :]
-        if CLAMP_GRADS:
-            A_maskTm = tl.clamp(A_maskTm, CLAMP_MIN, CLAMP_MAX) # Don't let values get too small or too large
-        A_maskTm = tl.where(A_maskTm < -1024, 0.0, tl.exp2(A_maskTm)) # Mask where pre exp was less than -1024 to zero
-        # A_maskTm = tl.exp2(A_maskTm)
-        
-        # Multiply the squared component and the A mask
-        pT = qkT2 * A_maskTm
+        A_maskT = Aq.to(tl.float32)[None, :] - Ak.to(tl.float32)[:, None]
+        A_maskT = tl.where(A_maskT < -1024, 0.0, tl.exp2(A_maskT)) # Mask where pre exp was less than -1024 to zero
         
         # Autoregressive masking.
         if MASK:
             mask = (offs_m[None:] >= offs_n[:, None])
-            pT = tl.where(mask, pT, 0.0)
+            A_maskT = tl.where(mask, A_maskT, 0.0)
             
-        # Compute dp
-        do = tl.load(do_ptrs).to(tl.float32)
-        dpT = tl.dot(v.to(tl.float32), tl.trans(do))
+        # Load output gradient
+        do = tl.load(do_ptrs)
+        
+        # Compute transposed masked QK: K^T @ Q * M
+        KQ = tl.dot(k, qT)
+        if MASK:
+            KQ = tl.where(mask, KQ, 0.0)
             
-        # Compute dV.
-        # pT = pT.to(tl.float16)
-        dv += tl.dot(pT, do)
-        
-        # squaremax derivative
-        # dsT = A_maskTm * (dpT - tl.sum(dpT * ppT, 0, keep_dims=True))
-        dsT = A_maskTm.to(tl.float32) * (dpT.to(tl.float32) - s[None, :].to(tl.float32))
-        # dsT = (dsT).to(tl.float16)
-        
-        # We need to multiply by 2qk and the A mask to handle the square term
-        dqkT = 2 * qkT.to(tl.float32) * dsT.to(tl.float32)
-        
+        # Apply activation function to QK
+        if FUNCTION == "squared":
+            KQ2 = KQ.to(tl.float32) * KQ.to(tl.float32)
+        elif FUNCTION == "exp":
+            KQe = tl.exp(KQ.to(tl.float32))
+            
+        # Compute the K gradient
+        VDO = tl.dot(v, tl.trans(do))
         if MASK:
-            dqkT = tl.where(mask, dqkT, 0.0)
+            VDO = tl.where(mask, VDO, 0.0)
+        if FUNCTION == "linear":
+            # ((v @ do^T) * M^T * A^T) @ Q
+            dk += tl.dot((VDO * A_maskT.to(tl.float16)).to(tl.float16), tl.trans(qT))
+        elif FUNCTION == "squared":
+            # ((v @ do^T) * M^T * A^T * 2 * (K @ Q^T)) @ Q
+            dk += tl.dot((VDO * A_maskT.to(tl.float16)).to(tl.float16) * 2 * KQ.to(tl.float16), tl.trans(qT))
+        elif FUNCTION == "exp":
+            # ((v @ do^T) * M^T * A^T * KQ^T * e^(K @ Q^T)) @ Q
+            dk += tl.dot((VDO.to(tl.float32) * A_maskT.to(tl.float32) * KQe.to(tl.float32)).to(tl.float16), tl.trans(qT))
         
-        # Accumulate dk grads
-        dk = tl.dot(dqkT, tl.trans(qT).to(tl.float32), dk)
+        # Compute the V gradient
+        if FUNCTION == "linear":
+            # ((K @ Q^T) * M * A^T) @ do
+            dv += tl.dot(KQ.to(tl.float16) * A_maskT.to(tl.float16), do)
+        elif FUNCTION == "squared":
+            # ((K @ Q^T)**2 * M * A^T) @ do
+            dv += tl.dot((KQ2.to(tl.float32) * A_maskT.to(tl.float32)).to(tl.float16), do)
+        elif FUNCTION == "exp":
+            # (e^(K @ Q^T) * M * A^T) @ do
+            dv += tl.dot((KQe.to(tl.float32) * A_maskT.to(tl.float32)).to(tl.float16), do)
         
-        # Multiply by qk2 to get the da grad
-        daT = dsT.to(tl.float32) * qkT2.to(tl.float32)
-        if MASK:
-            daT = tl.where(mask, daT, 0.0)
-        # Accumulate dA grads
-        da_k += -tl.sum(daT.to(tl.float32), axis=1)
+        # Compute the gradient for the cols of the A mask
+        # Note that it's transposed for since we compute along the cols
+        # The negative is because we subtract the cols values from the rows
+        if FUNCTION == "linear":
+            # (K @ Q^T) * M * (V @ do^T) * A
+            da_k -= tl.sum(KQ.to(tl.float32) * VDO.to(tl.float32) * A_maskT.to(tl.float32), axis=1)
+        elif FUNCTION == "squared":
+            # (K @ Q^T)**2 * M * (V @ do^T) * A
+            da_k -= tl.sum(KQ2.to(tl.float32) * VDO.to(tl.float32) * A_maskT.to(tl.float32), axis=1)
+        elif FUNCTION == "exp":
+            # e^(K @ Q^T) * M * (V @ do^T) * A
+            da_k -= tl.sum(KQe.to(tl.float32) * VDO.to(tl.float32) * A_maskT.to(tl.float32), axis=1)
         
         # Add row
         # Increment pointers.
@@ -528,7 +357,7 @@ def _attn_bwd_dkdv(dk, dv, da_k,  #
 # the main inner-loop logic for computing dQ
 @triton.jit(debug=DEBUG)
 def _attn_bwd_dqda(dq, da_q, q, K, V, A, Aq,  #
-                 do, m, s,
+                 do,
                  # shared by Q/K/V/DO.
                  stride_tok, stride_d,  #
                  H, N_CTX,  #
@@ -537,7 +366,8 @@ def _attn_bwd_dqda(dq, da_q, q, K, V, A, Aq,  #
                  HEAD_DIM: tl.constexpr,
                  # Filled in by the wrapper.
                  start_m, start_n, num_steps,  #
-                 MASK: tl.constexpr):
+                 MASK: tl.constexpr,
+                 FUNCTION: tl.constexpr):
     offs_m = start_m + tl.arange(0, BLOCK_M2)
     offs_n = start_n + tl.arange(0, BLOCK_N2)
     offs_k = tl.arange(0, HEAD_DIM)
@@ -550,59 +380,58 @@ def _attn_bwd_dqda(dq, da_q, q, K, V, A, Aq,  #
     curr_n = start_n
     step_n = BLOCK_N2
     for blk_idx in range(num_steps):
-        # Inner product
+        # Load K and V
         kT = tl.load(kT_ptrs)
         vT = tl.load(vT_ptrs)
         
-        # Compute qk**2
-        qk = tl.dot(q, kT)
-        qk2 = qk * qk
-        
-        # Compute the A mask and exponentiate the negative max
-        # which also gives the denominator
+        # Compute the A mask
         offs_n = curr_n + tl.arange(0, BLOCK_N2)
         Ak = tl.load(A + offs_n)
-        A_maskm = Aq.to(tl.float32)[:, None] - Ak.to(tl.float32)[None, :] - m
-        if CLAMP_GRADS:
-            A_maskm = tl.clamp(A_maskm, CLAMP_MIN, CLAMP_MAX)
-        A_maskm = tl.where(A_maskm < -1024, 0.0, tl.exp2(A_maskm)) # Mask where pre exp was less than -1024 to zero
-        # A_maskm = tl.exp2(A_maskm)
+        A_mask = Aq.to(tl.float32)[:, None] - Ak.to(tl.float32)[None, :]
+        A_mask = tl.where(A_mask < -1024, 0.0, tl.exp2(A_mask)) # Mask where pre exp was less than -1024 to zero
         
-        # # Multiply the squared component and A mask
-        # p = qk2 * A_maskm
-        
-        # # Autoregressive masking.
-        # if MASK:
-        #     mask = (offs_m[:, None] >= offs_n[None, :])
-        #     p = tl.where(mask, p, 0.0)
-            
-        # Compute dp
-        dp = tl.dot(do, vT).to(tl.float32)
-            
-        # squaremax derivative.
-        # ds = A_maskm * (dp - tl.sum(dp * p, 1, keep_dims=True))
-        ds = A_maskm.to(tl.float32) * (dp.to(tl.float32) - s.to(tl.float32))
-        # if MASK:
-        #     mask = (offs_m[:, None] >= offs_n[None, :])
-        #     ds = tl.where(mask, ds, 0.0)
-            
-        # We need to multiply by 2qk and the A mask to handle the square term
-        dqk = 2 * qk.to(tl.float32) * ds.to(tl.float32)
-        
+        # Autoregressive masking.
         if MASK:
             mask = (offs_m[:, None] >= offs_n[None, :])
-            dqk = tl.where(mask, dqk, 0.0)
-        
-        # Accumulate dq grads
-        dq = tl.dot(dqk.to(tl.float32), tl.trans(kT).to(tl.float32), dq)
-        
-        # Multiply by qk2 to get the da grad
-        da = ds.to(tl.float32) * qk2.to(tl.float32)
+            A_mask = tl.where(mask, A_mask, 0.0)
+            
+        # Compute masked output grad, value inner product
+        DOV = tl.dot(do.to(tl.float16), vT.to(tl.float16))
         if MASK:
-            mask = (offs_m[:, None] >= offs_n[None, :])
-            da = tl.where(mask, da, 0.0)
-        # Accumulate dA grad
-        da_q += tl.sum(da.to(tl.float32), axis=1)
+            DOV = tl.where(mask, DOV, 0.0)
+        
+        # Compute masked query, key inner product
+        QK = tl.dot(q.to(tl.float16), kT.to(tl.float16))
+        if MASK:
+            QK = tl.where(mask, QK, 0.0)
+            
+        # Apply activation function to QK
+        if FUNCTION == "squared":
+            QK2 = QK.to(tl.float32) * QK.to(tl.float32)
+        elif FUNCTION == "exp":
+            QKe = tl.exp(QK)
+            
+        # Compute the Q gradient
+        if FUNCTION == "linear":
+            # ((do @ v^T) * M * A) @ K
+            dq += tl.dot((DOV * A_mask.to(tl.float16)).to(tl.float16), tl.trans(kT))
+        elif FUNCTION == "squared":
+            # ((do @ v^T) * M * A * 2 * (Q @ K^T)) @ K
+            dq += tl.dot((DOV.to(tl.float32) * A_mask.to(tl.float32) * 2 * QK.to(tl.float32)).to(tl.float16), tl.trans(kT).to(tl.float16))
+        elif FUNCTION == "exp":
+            # ((do @ v^T) * M * A * e^(Q @ K^T)) @ K
+            dq += tl.dot((DOV.to(tl.float32) * A_mask.to(tl.float32) * QKe.to(tl.float32)).to(tl.float16), tl.trans(kT))
+        
+        # Compute the gradient for the rows of the A mask
+        if FUNCTION == "linear":
+            # (Q @ K^T) * M * (do @ V^T) * A
+            da_q += tl.sum(QK.to(tl.float32) * DOV.to(tl.float32) * A_mask.to(tl.float32), axis=1) 
+        elif FUNCTION == "squared":
+            # (Q @ K^T)**2 * M * (do @ V^T) * A
+            da_q += tl.sum(QK2.to(tl.float32) * DOV.to(tl.float32) * A_mask.to(tl.float32), axis=1) 
+        elif FUNCTION == "exp":
+            # e^(Q @ K^T) * M * (do @ V^T) * A
+            da_q += tl.sum(QKe.to(tl.float32) * DOV.to(tl.float32) * A_mask.to(tl.float32), axis=1) 
         
         # Increment pointers.
         curr_n += step_n
@@ -615,7 +444,6 @@ def _attn_bwd_dqda(dq, da_q, q, K, V, A, Aq,  #
 def _attn_bwd(Q, K, V, A, sm_scale,  #
               DO,  #
               DQ, DK, DV, DA_Q, DA_K,  #
-              M, S,
               # shared by Q/K/V/DO.
               stride_z, stride_h, stride_tok, stride_d,  #
               A_stride_z, A_stride_h, #
@@ -625,7 +453,8 @@ def _attn_bwd(Q, K, V, A, sm_scale,  #
               BLOCK_M2: tl.constexpr,  #
               BLOCK_N2: tl.constexpr,  #
               BLK_SLICE_FACTOR: tl.constexpr,  #
-              HEAD_DIM: tl.constexpr):
+              HEAD_DIM: tl.constexpr,
+              FUNCTION: tl.constexpr,):
     LN2: tl.constexpr = 0.6931471824645996  # = ln(2)
 
     bhid = tl.program_id(2)
@@ -645,8 +474,6 @@ def _attn_bwd(Q, K, V, A, sm_scale,  #
     DV += adj
     DA_Q += adj_A
     DA_K += adj_A
-    M += off_chz
-    S += off_chz
 
     # load scales
     offs_k = tl.arange(0, HEAD_DIM)
@@ -673,12 +500,11 @@ def _attn_bwd(Q, K, V, A, sm_scale,  #
     dk, dv, da_k = _attn_bwd_dkdv(dk, dv, da_k, #
                             Q, k, v, A, Ak, sm_scale,  #
                             DO,  #
-                            M, S, #
                             stride_tok, stride_d,  #
                             H, N_CTX,  #
                             MASK_BLOCK_M1, BLOCK_N1, HEAD_DIM,  #
                             start_n, start_m, num_steps,  #
-                            MASK=True  #
+                            MASK=True, FUNCTION=FUNCTION,  #
                             )
 
     start_m += num_steps * MASK_BLOCK_M1
@@ -689,12 +515,11 @@ def _attn_bwd(Q, K, V, A, sm_scale,  #
         dk, dv, da_k,  #
         Q, k, v, A, Ak, sm_scale,  #
         DO,  #
-        M, S, #
         stride_tok, stride_d,  #
         H, N_CTX,  #
         BLOCK_M1, BLOCK_N1, HEAD_DIM,  #
         start_n, start_m, num_steps,  #
-        MASK=False  #
+        MASK=False, FUNCTION=FUNCTION,  #
     )
 
     dv_ptrs = DV + offs_n[:, None] * stride_tok + offs_k[None, :] * stride_d
@@ -716,12 +541,6 @@ def _attn_bwd(Q, K, V, A, sm_scale,  #
     dq = tl.zeros([BLOCK_M2, HEAD_DIM], dtype=tl.float32)
     da_q = tl.zeros([BLOCK_M2], dtype=tl.float32)
     do = tl.load(DO + offs_m[:, None] * stride_tok + offs_k[None, :] * stride_d)
-
-    m = tl.load(M + offs_m)
-    m = m[:, None]
-    
-    s = tl.load(S + offs_m)
-    s = s[:, None]
     
     # Load the Q part of the A mask which stays in memory
     Aq = tl.load(A + offs_m)
@@ -733,23 +552,23 @@ def _attn_bwd(Q, K, V, A, sm_scale,  #
     # structure for dK & dV above as much as possible.
     num_steps = BLOCK_M2 // MASK_BLOCK_N2
     dq, da_q = _attn_bwd_dqda(dq, da_q, q, K, V, A, Aq,  #
-                      do, m, s, #
+                      do, #
                       stride_tok, stride_d,  #
                       H, N_CTX,   #
                       BLOCK_M2, MASK_BLOCK_N2, HEAD_DIM,  #
                       start_m, end_n - num_steps * MASK_BLOCK_N2, num_steps,  #
-                      MASK=True  #
+                      MASK=True, FUNCTION=FUNCTION,  #
                       )
     end_n -= num_steps * MASK_BLOCK_N2
     # stage 2
     num_steps = end_n // BLOCK_N2
     dq, da_q = _attn_bwd_dqda(dq, da_q, q, K, V, A, Aq,  #
-                      do, m, s, #
+                      do, #
                       stride_tok, stride_d,  #
                       H, N_CTX,  #
                       BLOCK_M2, BLOCK_N2, HEAD_DIM,  #
                       start_m, end_n - num_steps * BLOCK_N2, num_steps,  #
-                      MASK=False  #
+                      MASK=False, FUNCTION=FUNCTION,  #
                       )
     # Write back dQ.
     dq_ptrs = DQ + offs_m[:, None] * stride_tok + offs_k[None, :] * stride_d
@@ -770,7 +589,7 @@ def _attn_bwd(Q, K, V, A, sm_scale,  #
 class _attention(torch.autograd.Function):
 
     @staticmethod
-    def forward(ctx, q, k, v, A_cumsum, causal, sm_scale, warp_specialize=True):
+    def forward(ctx, q, k, v, A_cumsum, causal, sm_scale, warp_specialize=True, FUNCTION="linear"):
         q = q.half().contiguous()
         k = k.half().contiguous()
         v = v.half().contiguous()
@@ -795,7 +614,7 @@ class _attention(torch.autograd.Function):
             waves_per_eu = 3 if HEAD_DIM_K <= 64 else 2
             extra_kern_args = {"waves_per_eu": waves_per_eu, "allow_flush_denorm": True}
 
-        M = torch.empty((q.shape[0], q.shape[1], q.shape[2]), device=q.device, dtype=torch.float32)
+        # M = torch.empty((q.shape[0], q.shape[1], q.shape[2]), device=q.device, dtype=torch.float32)
         # Use device_descriptor for Hopper + warpspec.
         if supports_host_descriptor() and not (is_hopper() and warp_specialize):
             # Note that on Hopper we cannot perform a FP8 dot with a non-transposed second tensor
@@ -834,7 +653,7 @@ class _attention(torch.autograd.Function):
             else:
                 extra_kern_args["maxnreg"] = 80
         _attn_fwd[grid](
-            sm_scale, M,  #
+            sm_scale,  #
             q.shape[0], q.shape[1],  #
             desc_q, desc_k, desc_v, desc_o, desc_A, #
             N_CTX=q.shape[2],  #
@@ -842,25 +661,26 @@ class _attention(torch.autograd.Function):
             FP8_OUTPUT=q.dtype == torch.float8_e5m2,  #
             STAGE=stage,  #
             warp_specialize=warp_specialize,  #
+            FUNCTION=FUNCTION,
             IS_HOPPER=is_hopper(),  #
             **extra_kern_args)
 
-        ctx.save_for_backward(q, k, v, o, M, A_cumsum)
+        ctx.save_for_backward(q, k, v, o, A_cumsum)
         ctx.sm_scale = sm_scale
         ctx.HEAD_DIM = HEAD_DIM_K
         ctx.causal = causal
         ctx.warp_specialize = warp_specialize
+        ctx.FUNCTION = FUNCTION
         return o
 
     @staticmethod
     def backward(ctx, do):
-        q, k, v, o, M, A_cumsum = ctx.saved_tensors
+        q, k, v, o, A_cumsum = ctx.saved_tensors
         do = do.contiguous()
         q = q.contiguous()
         k = k.contiguous()
         v = v.contiguous()
         o = o.contiguous()
-        M = M.contiguous()
         A_cumsum = A_cumsum.contiguous()
         # assert do.is_contiguous()
         # assert q.stride() == k.stride() == v.stride() == o.stride() == do.stride()
@@ -903,23 +723,9 @@ class _attention(torch.autograd.Function):
                 extra_kern_args["maxnreg"] = 168
             else:
                 extra_kern_args["maxnreg"] = 80
-        S = torch.empty_like(M)
-        _attn_bwd_preprocess_[ctx.grid](
-            ctx.sm_scale, S,  #
-            q.shape[0], q.shape[1],  #
-            q, k, v, do, A_cumsum, M, #
-            N_CTX=q.shape[2],  #
-            HEAD_DIM=HEAD_DIM_K,  #
-            FP8_OUTPUT=q.dtype == torch.float8_e5m2,  #
-            STAGE=3 if ctx.causal else 1,  #
-            warp_specialize=ctx.warp_specialize,  #
-            IS_HOPPER=is_hopper(),  #
-            BLOCK_M=BLOCK_M2, BLOCK_N=BLOCK_N2,
-            **extra_kern_args)
         grid = (N_CTX // BLOCK_N1, 1, BATCH * N_HEAD)
         _attn_bwd[grid](
             q, arg_k, v, A_cumsum, ctx.sm_scale, do, dq, dk, dv, dA_q, dA_k,  #
-            M, S, #
             q.stride(0), q.stride(1), q.stride(2), q.stride(3),  #
             A_cumsum.stride(0), A_cumsum.stride(1),
             N_HEAD, N_CTX,  #
@@ -928,7 +734,8 @@ class _attention(torch.autograd.Function):
             BLK_SLICE_FACTOR=BLK_SLICE_FACTOR,  #
             HEAD_DIM=ctx.HEAD_DIM,  #
             num_warps=NUM_WARPS,  #
-            num_stages=NUM_STAGES  #
+            num_stages=NUM_STAGES,  #
+            FUNCTION=ctx.FUNCTION
         )
         
         dA = dA_q + dA_k
@@ -939,6 +746,9 @@ class _attention(torch.autograd.Function):
 attention = _attention.apply
 
 TORCH_HAS_FP8 = hasattr(torch, 'float8_e5m2')
+
+FUNCTION = "exp"
+assert FUNCTION in ["linear", "squared", "exp"]
 
 
 @pytest.mark.parametrize("Z", [1, 4])
@@ -985,16 +795,18 @@ def test_op(Z, H, N_CTX, HEAD_DIM, causal, warp_specialize, mode, provider, dtyp
         A_cumsum = A_cumsum.float().detach().requires_grad_()
     A_mask = (((A_cumsum[:, :, :, None] - A_cumsum[:, :, None, :]))).masked_fill(~attention_mask.bool(), -torch.inf).exp().contiguous()#.to(ref_dtype)
     
+    # Inner prod, QK
     p = torch.matmul(q.float(), k.float().transpose(2, 3)) * sm_scale
-    # if causal:
-    #     p[:, :, M == 0] = float("-inf")
-    p = p**2
+    # Activation function
+    if FUNCTION == "squared":
+        p = p**2
+    elif FUNCTION == "exp":
+        p = p.exp()
+    # Mask
     p = p.masked_fill(~attention_mask.bool(), 0)
+    # A mask
     p = p * A_mask
-    # p = torch.softmax(p.float(), dim=-1)
-    p = p / p.sum(dim=-1, keepdim=True)
-    # p = p.to(ref_dtype)
-    # p = torch.exp(p)
+    # mul by values
     ref_out = torch.matmul(p.float(), v.float())#.to(ref_dtype)
     if mode == "bwd":
         dout = torch.randn_like(q)
@@ -1010,10 +822,10 @@ def test_op(Z, H, N_CTX, HEAD_DIM, causal, warp_specialize, mode, provider, dtyp
         v = v.permute(0, 1, 3, 2).contiguous()
         v = v.permute(0, 1, 3, 2)
         v = v.to(torch.float8_e5m2)
-    tri_out = attention(q, k, v, A_cumsum, causal, sm_scale, warp_specialize).half()
+    tri_out = attention(q, k, v, A_cumsum, causal, sm_scale, warp_specialize, FUNCTION).half()
     if mode == "fwd":
         atol = 3 if "fp8" in provider else 1e-2
-        # torch.testing.assert_close(tri_out, ref_out, atol=atol, rtol=0)
+        torch.testing.assert_close(tri_out, ref_out, atol=atol, rtol=0)
         return
     tri_out.backward(dout)
     tri_dv, v.grad = v.grad.clone(), None
@@ -1030,7 +842,7 @@ def test_op(Z, H, N_CTX, HEAD_DIM, causal, warp_specialize, mode, provider, dtyp
     torch.testing.assert_close(tri_dv.float(), ref_dv.float(), atol=1e-2, rtol=rtol)
     torch.testing.assert_close(tri_dk.float(), ref_dk.float(), atol=1e-2, rtol=rtol)
     torch.testing.assert_close(tri_dq.float(), ref_dq.float(), atol=1e-2, rtol=rtol)
-    torch.testing.assert_close(tri_da.float(), ref_da.float(), atol=1e-2, rtol=rtol)
+    torch.testing.assert_close(tri_da.float(), ref_da.float(), atol=1e-2, rtol=rtol)    
     
 
 if __name__ == "__main__":
@@ -1047,7 +859,6 @@ if __name__ == "__main__":
     #     provider="triton-fp16",
     # )
     
-    #"""
     b_idx = 0
     q = torch.load("debug_output/query_states").cuda().half().detach().requires_grad_()
     seq_len = (~(q[b_idx,0,:,0] == q[b_idx,0,-1,0])).sum()
@@ -1056,7 +867,7 @@ if __name__ == "__main__":
     k = torch.load("debug_output/key_states").cuda().half()[b_idx:b_idx+1,:,:seq_len].contiguous().detach().requires_grad_()
     v = torch.load("debug_output/value_states").cuda().half()[b_idx:b_idx+1,:,:seq_len].contiguous().detach().requires_grad_()
     A_cumsum = torch.load("debug_output/A_cumsum").cuda().half()[b_idx:b_idx+1,:,:seq_len].contiguous().detach().requires_grad_()
-    out = attention(q, k, v, A_cumsum, True, 0.125, False)
+    out = attention(q, k, v, A_cumsum, True, 0.125, False, "exp")
     out.sum().backward()
     # test_op(
     #     q.shape[0],
@@ -1072,7 +883,6 @@ if __name__ == "__main__":
     #     v=v,
     #     A_cumsum=A_cumsum
     # )
-    #"""
 
     test_op(
         8,

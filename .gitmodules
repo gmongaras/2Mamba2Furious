@@ -1,0 +1,3 @@
+[submodule "Triton_Efficient_Kronecker_Product"]
+	path = Triton_Efficient_Kronecker_Product
+	url = https://github.com/gmongaras/Triton-Efficient-Kronecker-Product.git

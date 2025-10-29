@@ -1,0 +1,48 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Python: Current File",
+            "type": "python",
+            "request": "launch",
+            "python": "/users/gmongaras/miniconda3/bin/python",
+
+
+
+            // "program": "kernel/_2Mamba2Furious_V2.py",
+            // "env": {
+            //         "CUDA_LAUNCH_BLOCKING": "1",
+            //         "CUDA_VISIBLE_DEVICES": "4",
+            //     },
+
+            // "program": "mamba_test/mamba_softmax.py",
+            // "program": "mamba_test/Mamba2.py",
+
+            // "program": "GPT_Trainer/infer2.py",
+            // "env": {
+            //         "CUDA_LAUNCH_BLOCKING": "1",
+            //         "CUDA_VISIBLE_DEVICES": "1",
+            //     },
+
+                
+            "program": "/home/gmongaras/miniconda3/bin/torchrun",
+            "args": [
+                "--nproc_per_node=2",
+                "--master-port", "29523",
+                "GPT_Trainer/train.py",
+            ],
+            "env": {
+                    "CUDA_LAUNCH_BLOCKING": "1", 
+                    "CUDA_VISIBLE_DEVICES": "0,1",
+                    // "TRITON_INTERPRET": "1",
+                },
+
+
+            "console": "integratedTerminal",
+            "justMyCode": false
+        }
+    ]
+}
