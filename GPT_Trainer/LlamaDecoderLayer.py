@@ -598,6 +598,10 @@ class LlamaAttention(nn.Module):
 
                 # dt projeciton
                 self.dt_proj = nn.Linear(config.hidden_size, config.num_attention_heads)
+            
+        # # Q and K norm
+        # self.q_norm = LlamaRMSNorm(self.head_dim)
+        # self.k_norm = LlamaRMSNorm(self.head_dim)
 
 
 
@@ -695,6 +699,10 @@ class LlamaAttention(nn.Module):
             query_states = self.q_proj(hidden_states).view(hidden_shape).transpose(1, 2)
             key_states = self.k_proj(hidden_states).view(hidden_shape).transpose(1, 2)
             value_states = self.v_proj(hidden_states).view(hidden_shape).transpose(1, 2)
+            
+        # # Apply QK norm
+        # query_states = self.q_norm(query_states)
+        # key_states = self.k_norm(key_states)
 
         # RoPE
         if self.no_rope == False:
@@ -708,17 +716,32 @@ class LlamaAttention(nn.Module):
 
         # Softmax attention. Just good ol flash attn
         if self.attention_type == "softmax":
-            attn_output, attn_weights = ALL_ATTENTION_FUNCTIONS["sdpa"](
-                self,
-                query_states,
-                key_states,
-                value_states,
-                attention_mask,
-                dropout=0.0,
-                scaling=self.scaling,
-                **kwargs,
+            # attn_output_, attn_weights_ = ALL_ATTENTION_FUNCTIONS["sdpa"](
+            #     self,
+            #     query_states,
+            #     key_states,
+            #     value_states,
+            #     attention_mask,
+            #     dropout=0.0,
+            #     scaling=self.scaling,
+            #     **kwargs,
+            # )
+            def forwrd_(query_states, key_states, value_states, scaling, kwargs):
+                attn_output, attn_weights = ALL_ATTENTION_FUNCTIONS["flash_attention_2"](
+                    self,
+                    query_states.half(),
+                    key_states.half(),
+                    value_states.half(),
+                    attention_mask=None,
+                    dropout=0.0,
+                    scaling=scaling,
+                    **kwargs,
+                )
+                attn_output = attn_output.transpose(1, 2)
+                return attn_output
+            attn_output = checkpoint(
+                forwrd_, query_states.half(), key_states.half(), value_states.half(), self.scaling, kwargs
             )
-            attn_output = attn_output.transpose(1, 2)
 
 
             if self.get_taylor_terms:

@@ -8,6 +8,8 @@ from tqdm import tqdm
 from contextlib import nullcontext
 import safetensors
 import math
+import sys
+import time
 
 from torch.nn.parallel import DistributedDataParallel as DDP
 import torch.distributed as dist
@@ -16,10 +18,10 @@ from datetime import timedelta
 
 try:
     from GPT_Trainer.multi_gpu_helpers import is_main_process
-    from GPT_Trainer.LlamaDecoderLayer8 import LlamaDecoderLayer
+    from GPT_Trainer.LlamaDecoderLayerClean import LlamaDecoderLayer
 except ModuleNotFoundError:
     from multi_gpu_helpers import is_main_process
-    from LlamaDecoderLayer8 import LlamaDecoderLayer
+    from LlamaDecoderLayerClean import LlamaDecoderLayer
 
 
 PRE_BLOCK = 128
@@ -149,7 +151,33 @@ def get_model(model_size, model_max_length, vocab_size, attention_type):
             "max_position_embeddings": model_max_length,
             "model_type": "llama",
             "num_attention_heads": 24,
-            "num_hidden_layers": 30,
+            "num_hidden_layers": 27,
+            "num_key_value_heads": 24,
+            "pretraining_tp": 1,
+            "rms_norm_eps": 1e-05,
+            "rope_scaling": None,
+            "tie_word_embeddings": False,
+            "torch_dtype": "float16",
+            "use_cache": True,
+            "vocab_size": vocab_size,
+            "attention_type": attention_type,
+        }))
+    elif model_size == "medium_wide":
+        return transformers.LlamaForCausalLM(config=transformers.LlamaConfig.from_dict({
+            "_name_or_path": "meta-llama/Llama-2-7b-hf",
+            "architectures": [
+                "LlamaForCausalLM"
+            ],
+            "bos_token_id": 1,
+            "eos_token_id": 2,
+            "hidden_act": "silu",
+            "hidden_size": 1024+512,
+            "initializer_range": 0.02,
+            "intermediate_size": 1024*3,
+            "max_position_embeddings": model_max_length,
+            "model_type": "llama",
+            "num_attention_heads": 24,
+            "num_hidden_layers": 20, # 30
             "num_key_value_heads": 24,
             "pretraining_tp": 1,
             "rms_norm_eps": 1e-05,
@@ -277,6 +305,8 @@ class Trainer():
         self.pass_mask = True
         if "LlamaDecoderLayer7" in LlamaDecoderLayer.__module__ \
             or "LlamaDecoderLayer8" in LlamaDecoderLayer.__module__ \
+            or "LlamaDecoderLayerClean" in LlamaDecoderLayer.__module__ \
+            or (attention_type == "softmax" and LlamaDecoderLayer.__module__ == "GPT_Trainer.LlamaDecoderLayer") \
             or (attention_type == "attention_type" and LlamaDecoderLayer.__module__ == "GPT_Trainer.LlamaDecoderLayer"):
                 self.pass_mask = False
         
@@ -306,7 +336,7 @@ class Trainer():
         
 
         if load_checkpoint:
-            self.load_checkpoint(model_save_path)
+            self.load_checkpoint(checkpoint_path)
         else:
             # Tokenizer
             try:
@@ -319,7 +349,7 @@ class Trainer():
             self.pad_token = torch.tensor([self.tokenizer.pad_token_id])
             
             # Set max sequence length
-            self.tokenizer.model_max_length = model_max_length+1
+            self.tokenizer.model_max_length = model_max_length
             
             # Get model
             self.model = get_model(model_size, model_max_length, self.tokenizer.vocab_size, attention_type)
@@ -406,8 +436,8 @@ class Trainer():
         encoded = [self.tokenizer.encode(t, add_special_tokens=True) for t in seqs]
         max_seq_len = max(len(e) for e in encoded)
         # Pad to PRE_BLOCK size
-        max_seq_len_padded = PRE_BLOCK*math.ceil(max_seq_len / PRE_BLOCK)+1
-        length_ = min(self.tokenizer.model_max_length, max_seq_len_padded)
+        max_seq_len_padded = PRE_BLOCK*math.ceil(max_seq_len / PRE_BLOCK)
+        length_ = min(self.tokenizer.model_max_length, max_seq_len_padded)+1
         batch = self.tokenizer([i["text"] for i in batch], truncation=True, padding="max_length", padding_side=self.padding_side, return_tensors="pt", max_length=length_)
 
         # # Max length of the input (+1 for the extra pad token), but not more than the model's max length
@@ -581,7 +611,7 @@ class Trainer():
             wandb.init(
                 # project="Gated_Attention",
                 # project="Gated_Attention_V2",
-                project="Mamba_buildup",
+                project="Mamba_Squared_Experiemnts",
                 name=self.wandb_name,
                 notes=None, # May add notes later
                 
@@ -596,6 +626,8 @@ class Trainer():
     
         
         batch_loss = 0
+        num_nan_grad_steps = 0
+        num_nan = 0
         
         loss_fct = nn.CrossEntropyLoss(ignore_index=-100)
         
@@ -614,6 +646,10 @@ class Trainer():
             labels = batch["labels"].to(self.model.device)
         
             with torch.autocast(device_type='cuda', dtype=torch.bfloat16) if self.use_amp else nullcontext():
+                # input_ids = torch.load("debug_output/input_ids", map_location=str(labels.device))
+                # attention_mask = torch.load("debug_output/attention_mask", map_location=str(labels.device))
+                # labels = torch.load("debug_output/labels", map_location=str(labels.device))
+                
                 outputs = self.model(input_ids, attention_mask=attention_mask if self.pass_mask else None).logits
                 
                 # Mask labels with -100 where the attention mask is 0. Note that the mask needs to be shifted by one to match the labels
@@ -621,6 +657,16 @@ class Trainer():
                 
                 # Loss
                 loss = loss_fct(outputs.view(-1, self.model_ref.config.vocab_size), labels.view(-1).to(outputs.device))
+                
+                # Rarely this loss will become nan. It's really annoying to debug and seems to be due
+                # to some random state of the GPUs. For now, I am just gonna multiply the loss on this GPU by
+                # zero. This means all gradients will be zero and the model will not be changed. I think this
+                # will technically cause gradients across ranks to be aff by a factor of 1/# gpus. However, I
+                # am not gonna worry about it.
+                if loss.isnan().item():
+                    loss = loss * 0
+                    num_nan += 1
+                    print(f"loss was nan! Total nan losses: {num_nan}")
                 
                 # # Perplexity calculation
                 # # https://huggingface.co/docs/transformers/en/perplexity
@@ -646,6 +692,50 @@ class Trainer():
                 self.grad_scaler.scale(loss).backward()
             else:
                 loss.backward()
+                
+            if True in [i.grad.isnan().any().item() for i in self.model.parameters()]:
+                num_nan_grad_steps += 1
+                
+            # Save input and model on nan for debugging
+            # if loss.isnan().any().item() or True in [i.grad.isnan().any().item() for i in self.model.parameters()]:
+            # if loss.isnan().any().item():
+            #     print("loss was nan")
+            #     os.makedirs("debug_output", exist_ok=True)
+            #     torch.save(input_ids, "debug_output/input_ids")
+            #     torch.save(attention_mask, "debug_output/attention_mask")
+            #     torch.save(labels, "debug_output/labels")
+            #     pth = self.model_save_path
+            #     self.model_save_path = "debug_output"
+            #     self.save_model(step)
+            #     dist.destroy_process_group()
+            # After computing 'loss
+            # Exit if at least one rank has nan loss'
+            def ddp_any(cond: bool) -> bool:
+                t = torch.tensor([1 if cond else 0], device='cuda')
+                dist.all_reduce(t, op=dist.ReduceOp.SUM)
+                return t.item() > 0
+            def ddp_clean_exit(code=0):
+                try:
+                    dist.barrier()
+                except Exception:
+                    pass
+                if dist.is_initialized():
+                    dist.destroy_process_group()
+                sys.exit(code)
+            loss_is_nan = bool(torch.isnan(loss.detach()).any().detach().cpu().item())
+            if ddp_any(loss_is_nan):
+                if loss_is_nan:
+                    print("Loss is NaN on at least one rank; saving and exiting all ranks.")
+                    pth = f"debug_output/{self.rank}"
+                    os.makedirs(pth, exist_ok=True)
+                    torch.save(input_ids, f"{pth}/input_ids")
+                    torch.save(attention_mask, f"{pth}/attention_mask")
+                    torch.save(labels, f"{pth}/labels")
+                    self.model_save_path, _old = f"{pth}/", self.model_save_path
+                    self.save_model(step)
+                    self.model_save_path = _old
+                ddp_clean_exit(1)  # every rank exits together
+
                 
             # Clip gradients
             if self.use_amp:
@@ -684,6 +774,7 @@ class Trainer():
                         "loss": batch_loss,
                         "perplexity": torch.exp(torch.tensor(batch_loss)),
                         "lr": self.optimizer.param_groups[0]['lr'],
+                        # "num_nan_grad_steps": num_nan_grad_steps,
                     },
                     step=step)
                 
@@ -840,8 +931,8 @@ class Trainer():
 
         # Load the config
         config = torch.load(os.path.join(checkpoint_path, "config.pt"))
-        self.dataset = config.get("dataset", "HuggingFaceFW/fineweb")
-        self.model_size = config.get("model_size", "small")
+        self.dataset = config["dataset"]
+        self.model_size = config["model_size"]
         self.learning_rate = config["learning_rate"]
         self.warmup_steps = config["warmup_steps"]
         self.num_steps = config["num_steps"]
@@ -855,14 +946,14 @@ class Trainer():
         self.wandb_id = config["wandb_id"]
         self.attention_type = config["attention_type"]
         self.mlp_type = config["mlp_type"]
-        self.model_max_length = config.get("model_max_length", 1024)
+        self.model_max_length = config["model_max_length"]
 
         # Load the tokenizer
         self.tokenizer = torch.load(os.path.join(checkpoint_path, "tokenizer.pt"), weights_only=False)            
         self.tokenizer.pad_token_id = self.tokenizer.eos_token_id
         self.pad_token = torch.tensor([self.tokenizer.pad_token_id])
         # Set max sequence length
-        self.tokenizer.model_max_length = self.model_max_length 
+        self.tokenizer.model_max_length = self.model_max_length
 
         # Load model
         self.model = get_model(self.model_size, self.model_max_length, self.tokenizer.vocab_size, self.attention_type)
@@ -875,7 +966,7 @@ class Trainer():
             del old
 
         # Load in params
-        self.model.load_state_dict(safetensors.torch.load_file(self.model_save_path + "/model.safetensors"), strict=True)
+        self.model.load_state_dict(safetensors.torch.load_file(checkpoint_path + "/model.safetensors"), strict=True)
             
             
         # Put the model on the desired device

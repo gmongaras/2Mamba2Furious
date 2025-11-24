@@ -23,9 +23,11 @@ from torch.utils.checkpoint import checkpoint
 
 from einops import rearrange
 from causal_conv1d import causal_conv1d_fn
-from kernel._2Mamba2Furious_square2 import _attention as _2Mamba2Furious_square2
+from kernel._2Mamba2Furious_square import _attention as _2Mamba2Furious_square
 from kernel._2Mamba2Furious_exp import _attention as _2Mamba2Furious_exp
 from Triton_Efficient_Kronecker_Product.kron import kron
+
+from mamba_ssm.ops.triton.ssd_combined import mamba_chunk_scan_combined
 
 
 
@@ -324,6 +326,142 @@ def eager_attention_forward(
 
 
 
+
+
+
+
+
+# Configs for various linear attention types
+configs = {
+    # (3) Just normal linear attentio 
+    "linear": {
+        "use_kernel": False, 
+        "power": "1",
+        "qk_activation_type": "relu",
+        "use_in_conv": False,
+        "in_conv_dim": 2,
+        "use_NoPE": True,
+        "use_D_res": False,
+        "use_z_out_gate": False,
+        "norm_type": "sm_norm",
+        "use_A_mask": False,
+        "use_dt_bias": False,
+        "A_mask_value_dist_type": "none",
+        "A_mask_type": "discretize",
+        "precompute_attn_mask": True,
+    },
+    
+    # (4) Changes from linear:
+    # - use output norm instead of sm norm
+    # - do not use ReLU
+    "linear__output_norm": {
+        "use_kernel": False,
+        "power": "1",
+        "qk_activation_type": "none",
+        "use_in_conv": False,
+        "in_conv_dim": 2,
+        "use_NoPE": True,
+        "use_D_res": False,
+        "use_z_out_gate": False,
+        "norm_type": "output_norm",
+        "use_A_mask": False,
+        "use_dt_bias": False,
+        "A_mask_value_dist_type": "none",
+        "A_mask_type": "discretize",
+        "precompute_attn_mask": True,
+    },
+    
+    # (5) Changes from linear:
+    # - use output norm instead of sm norm
+    "linear__output_norm__ReLU": {
+        "use_kernel": False,
+        "power": "1",
+        "qk_activation_type": "relu",
+        "use_in_conv": False,
+        "in_conv_dim": 2,
+        "use_NoPE": True,
+        "use_D_res": False,
+        "use_z_out_gate": False,
+        "norm_type": "output_norm",
+        "use_A_mask": False,
+        "use_dt_bias": False,
+        "A_mask_value_dist_type": "none",
+        "A_mask_type": "discretize",
+        "precompute_attn_mask": True,
+    },
+    
+    # (6) + in conv (ws = 2)
+    # Changes from linear:
+    # - use output norm instead of sm norm
+    # - in conv (window size of 2)
+    "linear__output_norm__in_conv_k_2": {
+        "use_kernel": False,
+        "power": "1",
+        "qk_activation_type": "none",
+        "use_in_conv": True,
+        "in_conv_dim": 2,
+        "use_NoPE": True,
+        "use_D_res": False,
+        "use_z_out_gate": False,
+        "norm_type": "output_norm",
+        "use_A_mask": False,
+        "use_dt_bias": False,
+        "A_mask_value_dist_type": "none",
+        "A_mask_type": "discretize",
+        "precompute_attn_mask": True,
+    },
+    
+    # (7) + in conv (ws = 3)
+    # Changes from linear:
+    # - use output norm instead of sm norm
+    # - in conv (window size of 3)
+    "linear__output_norm__in_conv_k_3": {
+        "use_kernel": False,
+        "power": "1",
+        "qk_activation_type": "none",
+        "use_in_conv": True,
+        "in_conv_dim": 3,
+        "use_NoPE": True,
+        "use_D_res": False,
+        "use_z_out_gate": False,
+        "norm_type": "output_norm",
+        "use_A_mask": False,
+        "use_dt_bias": False,
+        "A_mask_value_dist_type": "none",
+        "A_mask_type": "discretize",
+        "precompute_attn_mask": True,
+    },
+    
+    # (8) + in conv (ws = 2) + silu
+    # Changes from linear:
+    # - use output norm instead of sm norm
+    # - in conv (window size of 3)
+    # - silu activation function
+    "linear__output_norm__in_conv_k_2__silu": {
+        "use_kernel": False,
+        "power": "1",
+        "qk_activation_type": "silu",
+        "use_in_conv": True,
+        "in_conv_dim": 2,
+        "use_NoPE": True,
+        "use_D_res": False,
+        "use_z_out_gate": False,
+        "norm_type": "output_norm",
+        "use_A_mask": False,
+        "use_dt_bias": False,
+        "A_mask_value_dist_type": "none",
+        "A_mask_type": "discretize",
+        "precompute_attn_mask": True,
+    },
+}
+
+
+
+
+
+
+
+
 class LlamaAttention(nn.Module):
     """Multi-headed attention from 'Attention Is All You Need' paper"""
 
@@ -339,20 +477,98 @@ class LlamaAttention(nn.Module):
 
 
 
-        self.use_exp = False
 
-        # Params
-        self.powers = [2]
-        self.learnable_coefficients = False
-        self.gamma_domain = False
-        self.use_norm = False
-        self.in_conv = True
-        self.low_rank_heads = False
-        self.NoPE = True
+        # Params -->
+        # self.power = "1" # Can be one of "1", "2", or "exp"
+        
+        # # True to use softmax style norm, False otherwise
+        # self.use_sm_norm = False
+        
+        # # True to use the input time convolution on QKV, False to have no input conv
+        # self.in_conv = False
+        
+        # # Use No poisitional encodings? If False, RoPE is used.
+        # self.NoPE = True
+        
+        # # Use D residual or not?
+        # self.use_D_res = False
+        
+        # # Add the z output gate or not?
+        # self.use_z_out_gate = False
+        
+        # # Use an output norm?
+        # self.use_output_norm = False
+        
+        # # Only for A masking
+        # self.use_A_mask = False
+        # self.dt_bias = False # Adds a bias to the dt value, pre softplus
+        # """
+        # Discretizes the values. 
+        # "dt" is what mamba uses
+        # Can take on one of:
+        # - "dt" - values = values * dt = values * softplus(dt)
+        # - "sigmoid" - values = values * sigmoid(dt)
+        # - "silu" - values = silu(values)
+        # - "softplus" - values = softplus(values)
+        # - "softplus2" - values = values*softplus(values)
+        # - "none" - No discretization
+        # """
+        # self.A_mask_value_dist_type = "none"
+        # # self.A_mask_value_dist_type = "dt"
+        # self.clamp_dt = False
+        # """
+        # A mask types can be one of (only if A mask is used)
+        # "discretize" is what mamba uses
+        # - "discretize" - Normal A mask: A_mask = -exp(A_log) * dt
+        # - "neg_softplus" - A_mask = -softplus(A)
+        # - "neg_softplus_dt" - A_mask = -softplus(A) * dt
+        # - "neg_softplus2" - A_mask = -A*softplus(A)
+        # - "neg_silu" - A_mask = -silu(A)
+        # """
+        # self.A_mask_type = "discretize"
+        # # self.A_mask_type = "neg_softplus"
+        
+        
+        
+        
+        # Params from config -->
+        layer_config = configs["linear__output_norm__ReLU"]
+        
+        # True to use a kernel. False to use torch ops
+        self.use_kernel = layer_config["use_kernel"]
+        
+        # Power applied on q and k inner product
+        self.power = layer_config["power"] # Can be one of "1", "2", or "exp"
+        assert self.power in ["1", "2", "exp"]
+        
+        # Activation applied on q and k (after the input convolution)
+        self.qk_activation_type = layer_config["qk_activation_type"]
+        assert self.qk_activation_type in ["relu", "silu", "none"]
+        
+        # True to use the input time convolution on QKV, False to have no input conv
+        self.use_in_conv = layer_config["use_in_conv"]
+        self.in_conv_dim = layer_config["in_conv_dim"]
+        
+        # Use No poisitional encodings? If False, RoPE is used.
+        self.NoPE = layer_config["use_NoPE"]
+        
+        # Use D residual or not?
+        self.use_D_res = layer_config["use_D_res"]
+        
+        # Add the z output gate or not?
+        self.use_z_out_gate = layer_config["use_z_out_gate"]
+        
+        """
+        Norm type can be one of
+        - "sm_norm" - Applies normalization like softmax, directly on q and k
+        - "output_norm" - Applies the norm after all the operations, right before the output projection
+        """
+        self.norm_type = layer_config["norm_type"]
+        assert self.norm_type in ["sm_norm", "output_norm"]
         
         # Only for A masking
-        self.A_mask = True
-        self.dt_bias = False # Adds a bias to the dt value, pre softplus
+        self.use_A_mask = layer_config["use_A_mask"]
+        self.dt_bias = layer_config["use_dt_bias"] # Adds a bias to the dt value, pre softplus
         """
         Discretizes the values. 
         "dt" is what mamba uses
@@ -364,10 +580,12 @@ class LlamaAttention(nn.Module):
         - "softplus2" - values = values*softplus(values)
         - "none" - No discretization
         """
-        self.A_mask_value_dist_type = "dt"
+        self.A_mask_value_dist_type = layer_config["A_mask_value_dist_type"]
+        # self.A_mask_value_dist_type = "dt"
+        assert self.A_mask_value_dist_type in ["dt", "sigmoid", "silu", "softplus", "softplus2", "none"]
         self.clamp_dt = False
         """
-        A mask types can be one of
+        A mask types can be one of (only if A mask is used)
         "discretize" is what mamba uses
         - "discretize" - Normal A mask: A_mask = -exp(A_log) * dt
         - "neg_softplus" - A_mask = -softplus(A)
@@ -375,11 +593,9 @@ class LlamaAttention(nn.Module):
         - "neg_softplus2" - A_mask = -A*softplus(A)
         - "neg_silu" - A_mask = -silu(A)
         """
-        self.A_mask_type = "neg_softplus"
-        # True to use value norm. False to not use a norm on the values.
-        self.use_value_norm = False
-        # True to normalize post output projection
-        self.use_post_norm = False
+        self.A_mask_type = layer_config["A_mask_type"]
+        # self.A_mask_type = "neg_softplus"
+        assert self.A_mask_type in ["discretize", "neg_softplus", "neg_softplus_dt", "neg_softplus2", "neg_silu"]
 
 
 
@@ -388,12 +604,9 @@ class LlamaAttention(nn.Module):
 
 
 
-
+        # Bunch o stuff >w<
         self.head_dim = getattr(config, "head_dim", config.hidden_size // config.num_attention_heads)
-        if self.low_rank_heads:
-            # Setting number of heads to 1
-            self.num_heads = config.num_attention_heads
-            self.config.num_attention_heads = self.config.num_key_value_heads = config.num_attention_heads = config.num_key_value_heads = 1
+        self.num_heads = config.num_attention_heads
         self.num_key_value_groups = config.num_attention_heads // config.num_key_value_heads
         self.scaling = self.head_dim**-0.5
         self.attention_dropout = config.attention_dropout
@@ -406,12 +619,7 @@ class LlamaAttention(nn.Module):
 
         # Combine the QKV projections
         all_dim = config.num_attention_heads * self.head_dim + 2 * config.num_key_value_heads * self.head_dim
-        if self.low_rank_heads:
-            # Adding low rank heads
-            self.all_dim_no_heads = all_dim
-            self.all_dim_heads = all_dim+self.num_heads*3
-            all_dim = self.all_dim_heads
-        if self.A_mask:
+        if self.use_A_mask:
             all_dim_ = all_dim
             all_dim = all_dim + config.num_attention_heads
             
@@ -446,31 +654,19 @@ class LlamaAttention(nn.Module):
                 self.dt_bias_value = 0
         self.q_size = config.num_attention_heads * self.head_dim
         self.kv_size = config.num_key_value_heads * self.head_dim
+        
+        # Input and output projections
         self.qkv_proj = nn.Linear(
             config.hidden_size, all_dim, bias=config.attention_bias
         )
-        if self.low_rank_heads:
-            self.o_proj = nn.Linear(
-                self.num_heads * self.head_dim, config.hidden_size, bias=config.attention_bias
-            )
-        else:
-            self.o_proj = nn.Linear(
-                config.num_attention_heads * self.head_dim, config.hidden_size, bias=config.attention_bias
-            )
+        self.o_proj = nn.Linear(
+            config.num_attention_heads * self.head_dim, config.hidden_size, bias=config.attention_bias
+        )
 
-
-        if self.in_conv:
-            d_conv = 2
-            if self.low_rank_heads:
-                self.conv1d = nn.Conv1d(
-                    in_channels=self.all_dim_no_heads,
-                    out_channels=self.all_dim_no_heads,
-                    bias=True,
-                    kernel_size=d_conv,
-                    groups=self.all_dim_no_heads,
-                    padding=d_conv - 1,
-                )
-            elif self.A_mask:
+        # Input convolution
+        if self.use_in_conv:
+            d_conv = int(self.in_conv_dim)
+            if self.use_A_mask:
                 self.conv1d = nn.Conv1d(
                     in_channels=all_dim_,
                     out_channels=all_dim_,
@@ -491,71 +687,40 @@ class LlamaAttention(nn.Module):
 
             global causal_conv1d_fn
             from causal_conv1d import causal_conv1d_fn
-
-
-        # Coefficients for all orders (initialized to 1/n!)
-        if not self.use_exp:
-            if self.gamma_domain:
-                order_coefficients = torch.tensor(self.powers, dtype=torch.float)[:, None, None, None].repeat(1, config.num_attention_heads, 1, 1).float()
-                # self.register_buffer("order_coefficients", torch.tensor([i+0.5 for i in range(0, self.order+1)], dtype=torch.float)[:, None, None, None].repeat(1, config.num_attention_heads, 1, 1).float())
-            else:
-                # self.order_coefficients = nn.Parameter(torch.tensor([1/math.factorial(i) for i in range(0, self.order+1)])[:, None, None, None].repeat(1, config.num_attention_heads, 1, 1).float())
-                order_coefficients = torch.tensor([0.0 for i in self.powers])[:, None, None, None].repeat(1, config.num_attention_heads, 1, 1).float()
             
-            if self.learnable_coefficients:
-                self.order_coefficients = nn.Parameter(order_coefficients)
-            else:
-                self.register_buffer("order_coefficients", order_coefficients)
+           
+        # qk activation function
+        if self.qk_activation_type == "silu":
+            self.qk_act = torch.nn.functional.silu
+        elif self.qk_activation_type == "relu":
+            self.qk_act = torch.nn.functional.relu
+        elif self.qk_activation_type == "none":
+            self.qk_act = torch.nn.Identity()
         else:
-            self.order_coefficients = None
-        # self.order_coefficients = nn.Parameter((1/torch.arange(1, self.order+1).cumprod(-1))[:, None, None, None].repeat(1, config.num_attention_heads, 1, 1).float())
-        # self.register_buffer("order_coefficients", (1/torch.arange(1, self.order+1).cumprod(-1))[:, None, None, None].repeat(1, config.num_attention_heads, 1, 1).float())
-
-        # # Matrices for each order
-        # min_val = 4
-        # sizes = [self.head_dim for i in range(1, self.order+1)]
-        # self.A_projs = nn.ParameterList([
-        #     torch.eye(self.head_dim) for i in range(1, self.order+1)
-        # ])
-        # self.B_projs = nn.ParameterList([
-        #     torch.eye(self.head_dim) for i in range(1, self.order+1)
-        # ])
+            assert False
+            
+        # D residual
+        if self.use_D_res:
+            self.D = nn.Parameter(torch.ones(self.num_heads, self.head_dim))
         
-        # position_ids = torch.arange(0, 1024)
-        # self.rope_embeddings = [
-        #     torch.stack(LlamaRotaryEmbeddingPrecompute(config, dim=sizes[i-1])(position_ids[None, :])) \
-        #         for i in range(1, self.order+1)
-        # ]
         
-
-        # Output Norm
-        if self.use_norm:
-            self.out_norm = nn.RMSNorm(config.head_dim)
-        else:
-            self.out_norm = nn.Identity()
+        # z output gate requires another projection of the input
+        if self.use_z_out_gate:
+            self.z_gate_proj = nn.Linear(config.hidden_size, self.num_heads * self.head_dim)
             
-        # # Q and K norms
-        # self.q_norm = LlamaRMSNorm(config.head_dim)
-        # self.k_norm = LlamaRMSNorm(config.head_dim)
+            
+        # Ouptput norm
+        if self.norm_type == "output_norm":
+            self.out_norm = nn.RMSNorm(self.num_heads * self.head_dim)
+            
         
-        # Value norm
-        if self.use_value_norm:
-            self.value_norm = nn.RMSNorm(config.head_dim)
-        else:
-            self.value_norm = nn.Identity()
-            
-        # Post norm
-        if self.use_post_norm:
-            self.post_norm = nn.RMSNorm(config.hidden_size)
-        else:
-            self.post_norm = nn.Identity()
-            
-        # For inference time
-        self.use_efficient = False
-        self.hidden_conv = None
-        self.hidden_num = None
-        self.hidden_denom = None
-        self.is_inference = False
+        # Precompute attention mask if we are not using a kernel
+        if not self.use_kernel:
+            max_seq_len = config.max_position_embeddings
+            self.register_buffer(
+                "attn_mask",
+                ~torch.tril(torch.ones(max_seq_len, max_seq_len)).bool()[None, None, :, :]
+            )
 
 
 
@@ -571,21 +736,10 @@ class LlamaAttention(nn.Module):
         input_shape = hidden_states.shape[:-1]
         hidden_shape = (*input_shape, -1, self.head_dim)
 
-        # Add positional encodings
-        # hidden_states = self.abs_pos_enc(hidden_states))
-
-
-
-
 
         # Combined QKV
         QKV = self.qkv_proj(hidden_states)
-        if self.low_rank_heads:
-            # Get heads
-            heads_ = torch.nn.functional.softplus(QKV[:, :, self.all_dim_no_heads:])
-            QKV = QKV[:, :, :self.all_dim_no_heads]
-            query_heads, key_heads, value_heads = heads_.split(self.num_heads, dim=-1)
-        if self.A_mask:
+        if self.use_A_mask:
             # Get dt projection
             if self.A_mask_value_dist_type == "sigmoid":
                 dt = torch.nn.functional.sigmoid(QKV[:, :, -self.config.num_attention_heads:] + self.dt_bias_value)
@@ -627,36 +781,13 @@ class LlamaAttention(nn.Module):
             A = None
 
         # Apply input convolution
-        if self.use_efficient:
-            if self.in_conv:
-                # Append the previous part of the sequence
-                assert self.conv1d.weight.shape[-1] == 2, "conv1d dimensions larger than 2 are not supported, but can be easily lol"
-                h_is_none = self.hidden_conv is None
-                if not h_is_none:
-                    QKV = torch.cat([self.hidden_conv, QKV], dim=-2)
-                    
-                # Save the last token
-                self.hidden_conv = QKV[:, -1:].clone()
-                    
-                # Do the conv
-                QKV = causal_conv1d_fn(
-                    x=QKV.transpose(1, 2).contiguous(),
-                    weight=rearrange(self.conv1d.weight, "d 1 w -> d w"),
-                    bias=self.conv1d.bias,
-                    activation=None,
-                ).transpose(1, 2)
-                
-                # Get the last token in the sequence if it's not the first pass
-                if not h_is_none:
-                    QKV = QKV[:, -1:]
-        else:
-            if self.in_conv:
-                QKV = causal_conv1d_fn(
-                    x=QKV.transpose(1, 2).contiguous(),
-                    weight=rearrange(self.conv1d.weight, "d 1 w -> d w"),
-                    bias=self.conv1d.bias,
-                    activation=None,
-                ).transpose(1, 2)
+        if self.use_in_conv:
+            QKV = causal_conv1d_fn(
+                x=QKV.transpose(1, 2).contiguous(),
+                weight=rearrange(self.conv1d.weight, "d 1 w -> d w"),
+                bias=self.conv1d.bias,
+                activation=None,
+            ).transpose(1, 2)
 
         # Get QKV tensors
         query_states = QKV[:, :, :self.q_size]
@@ -667,17 +798,13 @@ class LlamaAttention(nn.Module):
         query_states = query_states.view(hidden_shape).transpose(1, 2)
         key_states = key_states.view(hidden_shape).transpose(1, 2)
         value_states = value_states.view(hidden_shape).transpose(1, 2)
-        if self.low_rank_heads:
-            query_states = query_states * query_heads.mT[:, :, :, None]
-            key_states = key_states * key_heads.mT[:, :, :, None]
-            value_states = value_states * value_heads.mT[:, :, :, None]
-            
-        # # Normalize q and k
-        # query_states = self.q_norm(query_states)
-        # key_states = self.k_norm(key_states)
+
+        # D res comes from multiplying D with the values before transforming the values at all
+        if self.use_D_res:
+            D_res = value_states * self.D[None, :, None, :,]
 
         # Discretization for value heads as done in Mamba
-        if self.A_mask and self.A_mask_value_dist_type != "none":
+        if self.use_A_mask and self.A_mask_value_dist_type != "none":
             assert self.A_mask_value_dist_type in ["dt", "silu", "softplus", "softplus2", "sigmoid"]
             if self.A_mask_value_dist_type == "dt" or self.A_mask_value_dist_type == "sigmoid":
                 value_states = value_states * dt.mT[..., None]
@@ -690,165 +817,109 @@ class LlamaAttention(nn.Module):
             else:
                 assert False
 
+        # Apply activation function
+        query_states = self.qk_act(query_states)
+        key_states = self.qk_act(key_states)
+
         # RoPE
         if not self.NoPE:
             cos, sin = position_embeddings
             query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
             
-            
-            
-        # Value norm
-        value_states = self.value_norm(value_states)
-
+        # Create z output gate
+        if self.use_z_out_gate:
+            z_out_gate = torch.nn.functional.silu(self.z_gate_proj(hidden_states)).view(hidden_shape).transpose(1, 2)
 
 
         
-        def forwrd_gated(query_states, key_states, value_states, attention_mask, order_coefficients, norm, A):
+        def forwrd_gated(query_states, key_states, value_states, attention_mask, A):
             # return norm((1/2) * ((query_states @ key_states.mT * (1/math.sqrt(key_states.shape[-1]))).masked_fill(attention_mask!=0, torch.tensor(0.0, device=query_states.device)) @ value_states.float())**2)
             
-            if self.use_exp:
+            if self.power == "exp":
                 attn_weights = (query_states @ key_states.mT * (1/math.sqrt(key_states.shape[-1]))).exp()
             else:
-                # Convert if gamma domain
-                if self.gamma_domain:
-                    # if self.cumulative:
-                    powers = order_coefficients.clamp(min=0)
-                    coefs = 1/torch.lgamma(powers+1).exp().cfloat()
-                    attn_mat = (query_states.cfloat() @ key_states.cfloat().mT * (1/math.sqrt(key_states.shape[-1])))
-                    attn_weights = 0
-                    for iter_num, i in enumerate(self.powers):
-                        attn_weights = attn_weights + coefs[iter_num:iter_num+1] * attn_mat**powers[iter_num:iter_num+1]
-                    # else:
-                    #     powers = order_coefficients.cfloat().clamp(min=0)
-                    #     coefs = 1/torch.lgamma(powers+1).exp()
-                    #     attn_weights = (query_states.cfloat() @ key_states.cfloat().mT * (1/math.sqrt(key_states.shape[-1])))
-                    #     attn_weights = coefs * attn_mat**powers
-
-                    # Only teh real part matters
-                    attn_weights = attn_weights.real
-                
-                else:
-                    # Accumulate over orders
-                    factor_ = 1/math.sqrt(key_states.shape[-1])
-
-                    # Convert to a value between 0 and 2
-                    order_coefficients = 2*order_coefficients.sigmoid()
-
-                    # if self.cumulative:
-                    attn_weights = 0
-                    for iter_num, _i in enumerate(self.powers):
-                        weight_ = order_coefficients[iter_num:iter_num+1] * (1/math.factorial(_i))
-                        if _i == 0:
-                            attn_weights = attn_weights + weight_
-                        else:
-                            attn_weights = attn_weights + (weight_ * (query_states.float() @ key_states.float().mT * factor_)**_i)
-                    # else:
-                    #     attn_weights = order_coefficients * (1/math.factorial(self.order)) * ((query_states.float() @ key_states.float().mT * factor_)**self.order)
+                attn_weights = (query_states @ key_states.mT * (1/math.sqrt(key_states.shape[-1])))**int(self.power)
             
             # Apply A mask
-            if self.A_mask:
+            if self.use_A_mask:
                 A_cumsum = torch.cumsum(A.float(), dim=-2).mT
                 A_mask = (((A_cumsum[:, :, :, None] - A_cumsum[:, :, None, :]))).masked_fill(attention_mask.bool(), -torch.inf).exp().to(query_states.dtype)
                 attn_weights = attn_weights * A_mask
             else:
-                attn_weights = attn_weights.masked_fill(attention_mask!=0, torch.tensor(0.0, device=query_states.device))
+                attn_weights = attn_weights.masked_fill(attention_mask[:, :, :query_states.shape[2], :key_states.shape[2]].clone().cuda(), torch.tensor(0.0, device=query_states.device))
+                # attn_weights = attn_weights.masked_fill(attention_mask!=0, torch.tensor(0.0, device=query_states.device))
 
             # Denominator
-            if not self.use_norm:
-                attn_weights = attn_weights / (attn_weights.sum(dim=-1, keepdim=True) + 1e-8)
+            if self.norm_type == "sm_norm":
+                attn_weights = attn_weights / attn_weights.sum(dim=-1, keepdim=True).clamp(min=1e-8)
 
             # Denominator
             # attn_weights = attn_weights / (attn_weights.norm(p=2, dim=-1, keepdim=True) + 1e-8)
             
             # Output
-            return norm(attn_weights @ value_states.float())
-            # return (query_states @ key_states.mT / math.sqrt(key_states.shape[-1]) + attention_mask).softmax(dim=-1) @ value_states
+            return attn_weights @ value_states.float()
             
-            
-        # attn_output_ = checkpoint(
-        #     forwrd_gated, query_states.clone().half(), key_states.clone().half(), value_states.clone().half(), attention_mask, self.order_coefficients, self.out_norm, A, use_reentrant=False
-        # )
         
-        is_inference = self.is_inference
-        if is_inference:
-            if self.use_efficient:
-                # If the numerator and denominator are None, we need to compute the hidden state manually
-                if self.hidden_num is None:
-                    # Compute outputs like normal cause it's easy this way
-                    attention_mask = ~torch.tril(torch.ones(query_states.shape[2], query_states.shape[2])).bool().repeat(query_states.shape[0], query_states.shape[1], 1, 1).to(query_states.device)
-                    attn_output = forwrd_gated(query_states, key_states, value_states, attention_mask, self.order_coefficients, self.out_norm, A)
-                    
-                    # Multiply keys by scale factor
-                    key_states = key_states * (1/math.sqrt(key_states.shape[-1]))
-                    
-                    # self-kronecker for queries and key
-                    query_states = kron(query_states.float())
-                    key_states = kron(key_states.float())
-                    # query_states = (query_states[..., :, None] * query_states[..., None, :]).flatten(-2, -1)
-                    # key_states = (key_states[..., :, None] * key_states[..., None, :]).flatten(-2, -1)
-                    
-                    # Compute A values
-                    A = A.mT[..., None].exp()
-                    
-                    # Iterate over sequence and produce hidden state
-                    self.hidden_num = self.hidden_denom = 0
-                    for t in range(0, key_states.shape[-2]):
-                        # Compute next hidden states
-                        A_ = A[:, :, t:t+1]
-                        K = key_states[:, :, t:t+1].mT
-                        V = value_states[:, :, t:t+1]
-                        self.hidden_num = self.hidden_num * A_ + (K @ V)
-                        self.hidden_denom = self.hidden_denom * A_ + K
-                    
-                # If previous hidden states exist, we can reuse them
-                else:
-                    # Multiply keys by scale factor
-                    key_states = key_states * (1/math.sqrt(key_states.shape[-1]))
-                    
-                    # self-kronecker for queries and key
-                    query_states = kron(query_states, 1)
-                    key_states = kron(key_states, 1)
-                    # query_states = (query_states[..., :, None] * query_states[..., None, :]).flatten(-2, -1)
-                    # key_states = (key_states[..., :, None] * key_states[..., None, :]).flatten(-2, -1)
-                    
-                    # Compute alpha value at current timestep
-                    A = A.mT[..., None].exp()
-                    
-                    # Update hidden states
-                    self.hidden_num = self.hidden_num * A + (key_states.mT @ value_states)
-                    self.hidden_denom = self.hidden_denom * A + key_states.mT
-                    
-                    # Calculate output
-                    attn_output = (query_states @ self.hidden_num) / (query_states @ self.hidden_denom)
-            else:
-                attention_mask = ~torch.tril(torch.ones(query_states.shape[2], query_states.shape[2])).bool().repeat(query_states.shape[0], query_states.shape[1], 1, 1).to(query_states.device)
-                attn_output = forwrd_gated(query_states, key_states, value_states, attention_mask, self.order_coefficients, self.out_norm, A)
+        assert self.power in ["1", "2", "exp"]
+        if self.power == "1":
+            # # Mamba kernel equivalence assuming use_sm_norm is set to False
+            # out_mamba = mamba_chunk_scan_combined(
+            #     (value_states / dt.mT[..., None]).transpose(1, 2),
+            #     dt,
+            #     -torch.exp(self.A_log),
+            #     key_states.transpose(1, 2) * (1/math.sqrt(key_states.shape[-1])),
+            #     query_states.transpose(1, 2),
+            #     chunk_size=32,
+            #     D=self.D if self.use_D_res else None,
+            #     z=self.z_gate_proj(hidden_states).view(hidden_shape) if self.use_z_out_gate else None,
+            # ).transpose(1, 2)
+            # attention_mask = ~torch.tril(torch.ones(query_states.shape[2], query_states.shape[2])).bool().repeat(query_states.shape[0], query_states.shape[1], 1, 1).to(query_states.device)
+            attn_output = torch.utils.checkpoint.checkpoint(
+                forwrd_gated,
+                query_states,
+                key_states,
+                value_states,
+                self.attn_mask.clone(),
+                A
+            )
+        elif self.power == "2":
+            A_cumsum = A.mT.float().cumsum(-1)
+            attn_output = _2Mamba2Furious_square.apply(query_states.half(), key_states.half(), value_states.half(), A_cumsum.float(), True, 1/math.sqrt(key_states.shape[-1]), False)
+        elif self.power == "exp":
+            A_cumsum = A.mT.float().cumsum(-1)
+            attn_output = _2Mamba2Furious_exp.apply(query_states.half(), key_states.half(), value_states.half(), A_cumsum.float(), True, 1/math.sqrt(key_states.shape[-1]), False)
         else:
-            if self.use_exp:
-                A_cumsum = A.mT.float().cumsum(-1)
-                attn_output = _2Mamba2Furious_exp.apply(query_states.half(), key_states.half(), value_states.half(), A_cumsum.float(), True, 1/math.sqrt(key_states.shape[-1]), False)
-            else:
-                A_cumsum = A.mT.float().cumsum(-1)
-                attn_output = _2Mamba2Furious_square2.apply(query_states.half(), key_states.half(), value_states.half(), A_cumsum.float(), True, 1/math.sqrt(key_states.shape[-1]), False)
+            assert False
+        # attention_mask = ~torch.tril(torch.ones(query_states.shape[2], query_states.shape[2])).bool().repeat(query_states.shape[0], query_states.shape[1], 1, 1).to(query_states.device)
+        # attn_output = forwrd_gated(query_states, key_states, value_states, attention_mask, A)
 
 
         # torch.save(query_states, "debug_output/query_states")
         # torch.save(key_states, "debug_output/key_states")
         # torch.save(value_states, "debug_output/value_states")
         # torch.save(A_cumsum, "debug_output/A_cumsum")
-
-
-
-        # Remove heads, output projection
+        
+        
+        # Apply the D residual
+        if self.use_D_res:
+            attn_output = attn_output + D_res
+            
+        # Apply the z output gate
+        if self.use_z_out_gate:
+            attn_output = attn_output * z_out_gate
+        
+        # Remove heads
         #### NOTE: For some reason huggingface decided to put the transpose in
         ####       the function (I think due to flash attn). I put it back here
         ####       but this means normal huggingface functions will have to be transposed :/
         attn_output = attn_output.transpose(1, 2).reshape(*input_shape, -1).contiguous()
+        
+        # Output norm
+        if self.norm_type == "output_norm":
+            attn_output = self.out_norm(attn_output)
+
+        # Output projection
         attn_output = self.o_proj(attn_output)
-        
-        
-        if self.use_post_norm:
-            attn_output = self.post_norm(attn_output)
 
 
         return attn_output, None
@@ -921,3 +992,43 @@ class LlamaDecoderLayer(nn.Module):
             outputs += (self_attn_weights,)
 
         return outputs
+
+if __name__ == "__main__":
+    B, L, d = 16, 1024, 1024+512
+    
+    import transformers
+    config = transformers.LlamaConfig.from_dict({
+            "_name_or_path": "meta-llama/Llama-2-7b-hf",
+            "architectures": [
+                "LlamaForCausalLM"
+            ],
+            "bos_token_id": 1,
+            "eos_token_id": 2,
+            "hidden_act": "silu",
+            "hidden_size": d,
+            "initializer_range": 0.02,
+            "intermediate_size": d*2,
+            "max_position_embeddings": L,
+            "model_type": "llama",
+            "num_attention_heads": 24,
+            "num_hidden_layers": 27,
+            "num_key_value_heads": 24,
+            "pretraining_tp": 1,
+            "rms_norm_eps": 1e-05,
+            "rope_scaling": None,
+            "tie_word_embeddings": False,
+            "torch_dtype": "float16",
+            "use_cache": True,
+            "vocab_size": 1024,
+            "attention_type": "softmax",
+        })
+    layer = LlamaDecoderLayer(config=config, layer_idx=0).cuda()
+    hidden_states = torch.randn(B, L, d).cuda()
+    position_embeddings = torch.arange(0, L)[None, :].repeat(B, 1).cuda()
+    # attention_mask = torch.ones(L)[None, :].repeat(B, 1).cuda()
+    attention_mask = None
+    out = layer.forward(
+        hidden_states,
+        # attention_mask,
+        # position_embeddings,
+    )

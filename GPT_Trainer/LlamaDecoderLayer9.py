@@ -23,8 +23,7 @@ from torch.utils.checkpoint import checkpoint
 
 from einops import rearrange
 from causal_conv1d import causal_conv1d_fn
-from kernel._2Mamba2Furious_square2 import _attention as _2Mamba2Furious_square2
-from kernel._2Mamba2Furious_exp import _attention as _2Mamba2Furious_exp
+from kernel._2Mamba2Furious_V2 import _attention as _2Mamba2Furious_V2
 from Triton_Efficient_Kronecker_Product.kron import kron
 
 
@@ -339,16 +338,19 @@ class LlamaAttention(nn.Module):
 
 
 
-        self.use_exp = False
+        self.use_exp = True
 
         # Params
         self.powers = [2]
         self.learnable_coefficients = False
         self.gamma_domain = False
-        self.use_norm = False
+        self.use_norm = True
         self.in_conv = True
         self.low_rank_heads = False
         self.NoPE = True
+        
+        # linear, square, or exp
+        self.FUNCTION = "square"
         
         # Only for A masking
         self.A_mask = True
@@ -365,21 +367,17 @@ class LlamaAttention(nn.Module):
         - "none" - No discretization
         """
         self.A_mask_value_dist_type = "dt"
-        self.clamp_dt = False
         """
         A mask types can be one of
         "discretize" is what mamba uses
         - "discretize" - Normal A mask: A_mask = -exp(A_log) * dt
         - "neg_softplus" - A_mask = -softplus(A)
-        - "neg_softplus_dt" - A_mask = -softplus(A) * dt
         - "neg_softplus2" - A_mask = -A*softplus(A)
         - "neg_silu" - A_mask = -silu(A)
         """
         self.A_mask_type = "neg_softplus"
         # True to use value norm. False to not use a norm on the values.
         self.use_value_norm = False
-        # True to normalize post output projection
-        self.use_post_norm = False
 
 
 
@@ -544,12 +542,6 @@ class LlamaAttention(nn.Module):
         else:
             self.value_norm = nn.Identity()
             
-        # Post norm
-        if self.use_post_norm:
-            self.post_norm = nn.RMSNorm(config.hidden_size)
-        else:
-            self.post_norm = nn.Identity()
-            
         # For inference time
         self.use_efficient = False
         self.hidden_conv = None
@@ -593,10 +585,6 @@ class LlamaAttention(nn.Module):
                 dt = torch.nn.functional.softplus(QKV[:, :, -self.config.num_attention_heads:] + self.dt_bias_value)
             QKV = QKV[:, :, :-self.config.num_attention_heads]
             
-            # Clamping dt
-            if self.clamp_dt:
-                dt = dt.clamp(max=10)
-            
             # If the mask type is "discretize", we calculate the
             # mask like normal
             # A_mask = -exp(A)*dt
@@ -612,9 +600,6 @@ class LlamaAttention(nn.Module):
                 # A_mask = -softplus(A)
                 if self.A_mask_type == "neg_softplus":
                     A = -torch.nn.functional.softplus(A)
-                # A_mask = -softplus(A)
-                elif self.A_mask_type == "neg_softplus_dt":
-                    A = -torch.nn.functional.softplus(A) * dt
                 # A_mask = -A*softplus(A)
                 elif self.A_mask_type == "neg_softplus2":
                     A = -A*torch.nn.functional.softplus(A)
@@ -699,6 +684,8 @@ class LlamaAttention(nn.Module):
             
         # Value norm
         value_states = self.value_norm(value_states)
+
+
 
 
 
@@ -826,16 +813,26 @@ class LlamaAttention(nn.Module):
         else:
             if self.use_exp:
                 A_cumsum = A.mT.float().cumsum(-1)
-                attn_output = _2Mamba2Furious_exp.apply(query_states.half(), key_states.half(), value_states.half(), A_cumsum.float(), True, 1/math.sqrt(key_states.shape[-1]), False)
+                attn_output = _2Mamba2Furious_V2.apply(query_states.half(), key_states.half(), value_states.half(), A_cumsum.float(), True, 1/math.sqrt(key_states.shape[-1]), False, self.FUNCTION)
             else:
                 A_cumsum = A.mT.float().cumsum(-1)
-                attn_output = _2Mamba2Furious_square2.apply(query_states.half(), key_states.half(), value_states.half(), A_cumsum.float(), True, 1/math.sqrt(key_states.shape[-1]), False)
+                attn_output = _2Mamba2Furious_V2.apply(query_states.half(), key_states.half(), value_states.half(), A_cumsum.float(), True, 1/math.sqrt(key_states.shape[-1]), False, self.FUNCTION)
+
+            
+            """
+            torch.save(query_states, "debug_output/query_states")
+            torch.save(key_states, "debug_output/key_states")
+            torch.save(value_states, "debug_output/value_states")
+            torch.save(A_cumsum, "debug_output/A_cumsum")
+            """
+
+            
+            if self.use_norm:
+                attn_output = self.out_norm(attn_output)
 
 
-        # torch.save(query_states, "debug_output/query_states")
-        # torch.save(key_states, "debug_output/key_states")
-        # torch.save(value_states, "debug_output/value_states")
-        # torch.save(A_cumsum, "debug_output/A_cumsum")
+
+
 
 
 
@@ -845,10 +842,6 @@ class LlamaAttention(nn.Module):
         ####       but this means normal huggingface functions will have to be transposed :/
         attn_output = attn_output.transpose(1, 2).reshape(*input_shape, -1).contiguous()
         attn_output = self.o_proj(attn_output)
-        
-        
-        if self.use_post_norm:
-            attn_output = self.post_norm(attn_output)
 
 
         return attn_output, None

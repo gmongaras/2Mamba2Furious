@@ -11,6 +11,7 @@ except ModuleNotFoundError:
 
 
 def main():
+    # torch.autograd.set_detect_anomaly(True)
     # Create the model trainer
     batch_size=32 # Total batch size across all gpus (that is, a batch size of 128 with 2 gpus has a gpu batch size of 64)
     learning_rate=1e-4
@@ -23,13 +24,18 @@ def main():
     # wandb_name="fineweb_softmax_35bs_2gpu_1024seqlen"
     # wandb_name="fineweb_linear_NoRoPE_2QKVConv_OutNorm_Order1_64bs_2gpu_1024seqlen"
     # wandb_name="fineweb_poly_4thorder_rootSizedDim_32bs_2gpu_1024seqlen"
+    
     # wandb_name="fineweb_Mamba_NoDRes_NoZGate_NoDT_noAProj_noConv__Plus1DivSqrtD_Multihead__32bs_2gpu_16Heads_1024seqlen"
-    wandb_name="Ker_8192L_Medium_2P_NoPE_Conv_AMask_AMaskTypeNEGSOFTPLUS_NOAMaskBias_AMaskValueDiscretizationDT_SMNorm"
+    # wandb_name="Ker_8192L_Medium_2P_NoPE_Conv_AMask_AMaskTypeNEGSOFTPLUS_NOAMaskBias_AMaskValueDiscretizationDT_SMNorm"
+    # wandb_name = "SM_8192L_Medium"
+    # wandb_name = "Mamba_8192L_Medium"
+    wandb_name = "small_2048sl_gpu_32bs__linear__output_norm__ReLU"
     log_steps=10
     use_amp=True
     # attention_type="gated_softmax_no_gate_L2norm_nodivS_noclamp"
     # attention_type="softmax_divS_gatev2"
-    attention_type="softmax"
+    # attention_type="softmax"
+    attention_type = "linear_mamba"
     # dataset="gmongaras/EleutherAI_the_pile_deduplicated"
     # dataset="gmongaras/SlimPajama-627B_Reupload"
     dataset="HuggingFaceFW/fineweb"
@@ -37,20 +43,22 @@ def main():
     mlp_type="normal" # gelu or normal
     clipping_value=None
     weight_decay=0.01
-    model_save_path = "models/Ker_8192L_Medium_2P_NoPE_Conv_AMask_AMaskTypeNEGSOFTPLUS_NOAMaskBias_AMaskValueDiscretizationDT_SMNorm"
-    # model_save_path = "models/del"
+    model_save_path = "models/small_2048sl_gpu_32bs__linear__output_norm__ReLU"
+    # model_save_path = "models/SM_8192L_Medium"
+    # model_save_path = "models/Mamba_8192L_Medium"
     num_save_steps = 1_000
     keep_dataset_in_mem = False
-    model_max_length = 8192
+    model_max_length = 2048
     test_per = 0.001
     num_steps_test = 10_000
-    model_size = "medium" # "small" (~300 million) or "large" (~2 billion) or "large_depth"
+    model_size = "small" # "small" (~300 million) or "medium" (~810 million) or "large" (~2 billion) or "large_depth"
     test_loss = True
 
     
     # Load in a checkpoint
     load_checkpoint = False
-    checkpoint_path = "models/Ker_8192L_Medium_2P_NoPE_Conv_AMask_AMaskTypeNEGSOFTPLUS_NOAMaskBias_AMaskValueDiscretizationDT_SMNorm/"
+    checkpoint_path = "models/small_2048sl_gpu_32bs__linear__output_norm__ReLU/"
+    # checkpoint_path = "debug_output/"
 
 
     

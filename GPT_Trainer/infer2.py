@@ -24,10 +24,12 @@ except ModuleNotFoundError:
 @torch.no_grad()
 def infer():
     # Path to the model
-    attention_type = "gated_softmax_plusplus_extratoks"
-    model_path = "models/Ker_4096L_2P_NoPE_Conv_AMask_AMaskTypeNEGSOFTPLUS_NOAMaskBias_AMaskValueDiscretizationDT_SMNorm/"
+    attention_type = "softmax"
+    size = "medium"
+    # model_path = "models/Ker_4096L_2P_NoPE_Conv_AMask_AMaskTypeNEGSOFTPLUS_NOAMaskBias_AMaskValueDiscretizationDT_SMNorm/"
+    model_path = "models/Ker_8192L_Medium_2P_NoPE_Conv_AMask_AMaskTypeNEGSOFTPLUS_NOAMaskBias_AMaskValueDiscretizationNone_SMNorm"
     device = "cuda:0"
-    model_max_length = 4096
+    model_max_length = 4096*2
     use_efficient = True
 
 
@@ -48,33 +50,60 @@ def infer():
     # Set max sequence length
     tokenizer.model_max_length = model_max_length
 
-    # GPT-J Model. We are training it from scratch
-    model = transformers.LlamaForCausalLM(config=transformers.LlamaConfig.from_dict({
-        "_name_or_path": "meta-llama/Llama-2-7b-hf",
-        "architectures": [
-            "LlamaForCausalLM"
-        ],
-        "bos_token_id": 1,
-        "eos_token_id": 2,
-        "hidden_act": "silu",
-        "hidden_size": 1024, #4096,
-        "initializer_range": 0.02,
-        "intermediate_size": 1024*2, # 11008
-        "max_position_embeddings": model_max_length,
-        "model_type": "llama",
-        "num_attention_heads": 16,
-        "num_hidden_layers": 20,
-        "num_key_value_heads": 16,
-        "pretraining_tp": 1,
-        "rms_norm_eps": 1e-05,
-        "rope_scaling": None,
-        "tie_word_embeddings": False,
-        "torch_dtype": "float16",
-        "use_cache": True,
-        # "vocab_size": 32000,
-        "vocab_size": tokenizer.vocab_size,
-        "attention_type": attention_type,
-    }))
+    # GPT-J Model. We are training it from 
+    if size == "medium":
+        model = transformers.LlamaForCausalLM(config=transformers.LlamaConfig.from_dict({
+            "_name_or_path": "meta-llama/Llama-2-7b-hf",
+            "architectures": [
+                "LlamaForCausalLM"
+            ],
+            "bos_token_id": 1,
+            "eos_token_id": 2,
+            "hidden_act": "silu",
+            "hidden_size": 1024+512,
+            "initializer_range": 0.02,
+            "intermediate_size": 1024*3,
+            "max_position_embeddings": model_max_length,
+            "model_type": "llama",
+            "num_attention_heads": 24,
+            "num_hidden_layers": 27,
+            "num_key_value_heads": 24,
+            "pretraining_tp": 1,
+            "rms_norm_eps": 1e-05,
+            "rope_scaling": None,
+            "tie_word_embeddings": False,
+            "torch_dtype": "float16",
+            "use_cache": True,
+            "vocab_size": tokenizer.vocab_size,
+            "attention_type": attention_type,
+        }))
+    else:
+        model = transformers.LlamaForCausalLM(config=transformers.LlamaConfig.from_dict({
+            "_name_or_path": "meta-llama/Llama-2-7b-hf",
+            "architectures": [
+                "LlamaForCausalLM"
+            ],
+            "bos_token_id": 1,
+            "eos_token_id": 2,
+            "hidden_act": "silu",
+            "hidden_size": 1024, #4096,
+            "initializer_range": 0.02,
+            "intermediate_size": 1024*2, # 11008
+            "max_position_embeddings": model_max_length,
+            "model_type": "llama",
+            "num_attention_heads": 16,
+            "num_hidden_layers": 20,
+            "num_key_value_heads": 16,
+            "pretraining_tp": 1,
+            "rms_norm_eps": 1e-05,
+            "rope_scaling": None,
+            "tie_word_embeddings": False,
+            "torch_dtype": "float16",
+            "use_cache": True,
+            # "vocab_size": 32000,
+            "vocab_size": tokenizer.vocab_size,
+            "attention_type": attention_type,
+        }))
 
     
     # Replace all self attention layers with the cosine attention layer
@@ -105,8 +134,8 @@ def infer():
     # tokenizer = torch.load(os.path.join(model_path, "tokenizer.pt"))  
             
     # inference
-    # sentence = "Tell me about Ravens.\n"
-    sentence = "The best bat in February is not always the best bat in June MLB Draft. Projection is a fickle thing and scouts are often divided on"
+    sentence = "Tell me about Ravens.\n"
+    # sentence = "The best bat in February is not always the best bat in June MLB Draft. Projection is a fickle thing and scouts are often divided on"
     
     
     # Tokenize the sentence
