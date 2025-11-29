@@ -272,7 +272,7 @@ def _attn_fwd(sm_scale, M, #
     acc = acc / l_i[:, None]
     m_ptrs = M + off_hz * N_CTX + offs_m
     tl.store(m_ptrs, m_i)
-    desc_o.store([qo_offset_y, 0], acc.to(dtype))
+    desc_o.store([qo_offset_y, 0], acc.to(tl.float32))
     
     
     
@@ -1117,7 +1117,7 @@ class _attention(torch.autograd.Function):
         HEAD_DIM_V = v.shape[-1]
         assert HEAD_DIM_Q == HEAD_DIM_K and HEAD_DIM_K == HEAD_DIM_V
         assert HEAD_DIM_K in {16, 32, 64, 128, 256}
-        o = torch.empty_like(q)
+        o = torch.empty_like(q).float()
         stage = 3 if causal else 1
         extra_kern_args = {}
         # Tuning for AMD target
@@ -1343,7 +1343,7 @@ def test_op(Z, H, N_CTX, HEAD_DIM, causal, warp_specialize, mode, provider, dtyp
         v = v.permute(0, 1, 3, 2).contiguous()
         v = v.permute(0, 1, 3, 2)
         v = v.to(torch.float8_e5m2)
-    tri_out = attention(q.half(), k.half(), v.half(), A_cumsum.float(), causal, sm_scale, warp_specialize).half()
+    tri_out = attention(q.half(), k.half(), v.half(), A_cumsum.float(), causal, sm_scale, warp_specialize)
     if mode == "fwd":
         atol = 3 if "fp8" in provider else 1e-2
         # torch.testing.assert_close(tri_out, ref_out, atol=atol, rtol=0)

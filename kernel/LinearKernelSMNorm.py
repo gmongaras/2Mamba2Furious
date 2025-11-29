@@ -58,15 +58,12 @@ def _attn_fwd_inner(acc, l_i, m_i, q, A_q,  #
     for start_n in tl.range(lo, hi, BLOCK_N, warp_specialize=warp_specialize):
         start_n = tl.multiple_of(start_n, BLOCK_N)
         # -- compute qk ----
-        k = desc_k.load([offsetk_y, 0]).T.to(tl.float32)
-        qk = tl.dot(q, k)
+        kT = desc_k.load([offsetk_y, 0]).T.to(tl.float32)
+        qk = tl.dot(q, kT) * qk_scale
         
         # Compute A mask
         A_k = desc_A_k.load([offsetk_y]).to(tl.float32)
         A_mask = (A_q[:, None] - A_k[None, :])
-        
-        # Squared inner product on q and k
-        qk = qk * qk_scale
         
         # Mask qk inner product if causal
         if STAGE_CAUSAL:
@@ -74,20 +71,6 @@ def _attn_fwd_inner(acc, l_i, m_i, q, A_q,  #
             mask = offs_m[:, None] >= (start_n + offs_n[None, :])
             # Mask upper triangle
             qk = tl.where(mask, qk, 0)
-        
-        # Get qk max
-        m_ij = tl.maximum(m_i, tl.max(qk, 1))
-        m_ij = tl.where(m_ij > 32, 32, m_ij) # Large max values can be problematic
-        
-        # Subtract max from A mask and calculate exponentate the A mask
-        A_mask_m = (A_mask - m_ij[:, None])
-        A_mask_m = tl.where(A_mask_m < -1024, 0.0, tl.exp2(A_mask_m)) # Mask where pre exp was less than -1024 to zero
-        if STAGE_CAUSAL:
-            # Mask upper triangle
-            A_mask_m = tl.where(mask, A_mask_m, 0)
-        
-        # A_mask * qk**2
-        p = qk * qk * A_mask_m
         
         # Compute the correction factor. This will change things from using
         # a max of m_i (previous blocks) to m_ij (current block).
@@ -259,7 +242,7 @@ def _attn_fwd(sm_scale, M, #
     # Store max values (combined with the denominator) and output
     m_ptrs = M + off_hz * N_CTX + offs_m
     tl.store(m_ptrs, m_i)
-    desc_o.store([qo_offset_y, 0], acc.to(tl.float32))
+    desc_o.store([qo_offset_y, 0], acc.to(dtype))
     
     
 
@@ -805,7 +788,7 @@ class _attention(torch.autograd.Function):
         HEAD_DIM_V = v.shape[-1]
         assert HEAD_DIM_Q == HEAD_DIM_K and HEAD_DIM_K == HEAD_DIM_V
         assert HEAD_DIM_K in {16, 32, 64, 128, 256}
-        o = torch.empty_like(q).float()
+        o = torch.empty_like(q)
         stage = 3 if causal else 1
         extra_kern_args = {}
         if is_hip():
@@ -1053,7 +1036,7 @@ def test_op(Z, H, N_CTX, HEAD_DIM, causal, warp_specialize, mode, provider, dtyp
         v = v.permute(0, 1, 3, 2).contiguous()
         v = v.permute(0, 1, 3, 2)
         v = v.to(torch.float8_e5m2)
-    tri_out = attention(q.half(), k.half(), v.half(), A_cumsum.float(), causal, sm_scale, warp_specialize)
+    tri_out = attention(q.half(), k.half(), v.half(), A_cumsum.float(), causal, sm_scale, warp_specialize).half()
     if mode == "fwd":
         atol = 3 if "fp8" in provider else 1e-2
         torch.testing.assert_close(tri_out.float(), ref_out.float(), atol=atol, rtol=0)

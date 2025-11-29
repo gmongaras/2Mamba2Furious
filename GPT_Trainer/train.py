@@ -29,13 +29,14 @@ def main():
     # wandb_name="Ker_8192L_Medium_2P_NoPE_Conv_AMask_AMaskTypeNEGSOFTPLUS_NOAMaskBias_AMaskValueDiscretizationDT_SMNorm"
     # wandb_name = "SM_8192L_Medium"
     # wandb_name = "Mamba_8192L_Medium"
-    wandb_name = "small_2048sl_gpu_32bs__linear__output_norm__ReLU"
+    wandb_name = "small_2048sl_gpu_32bs__linear__output_norm__dt_on_values"
     log_steps=10
     use_amp=True
     # attention_type="gated_softmax_no_gate_L2norm_nodivS_noclamp"
     # attention_type="softmax_divS_gatev2"
     # attention_type="softmax"
-    attention_type = "linear_mamba"
+    # attention_type = "linear_mamba"
+    attention_type = "linear__output_norm__dt_on_values"
     # dataset="gmongaras/EleutherAI_the_pile_deduplicated"
     # dataset="gmongaras/SlimPajama-627B_Reupload"
     dataset="HuggingFaceFW/fineweb"
@@ -43,7 +44,7 @@ def main():
     mlp_type="normal" # gelu or normal
     clipping_value=None
     weight_decay=0.01
-    model_save_path = "models/small_2048sl_gpu_32bs__linear__output_norm__ReLU"
+    model_save_path = "models/small_2048sl_gpu_32bs__linear__output_norm__dt_on_values"
     # model_save_path = "models/SM_8192L_Medium"
     # model_save_path = "models/Mamba_8192L_Medium"
     num_save_steps = 1_000
@@ -57,8 +58,8 @@ def main():
     
     # Load in a checkpoint
     load_checkpoint = False
-    checkpoint_path = "models/small_2048sl_gpu_32bs__linear__output_norm__ReLU/"
-    # checkpoint_path = "debug_output/"
+    checkpoint_path = "models/small_2048sl_gpu_32bs__linear__output_norm__dt_on_values/"
+    # checkpoint_path = "debug_output/0/"
 
 
     

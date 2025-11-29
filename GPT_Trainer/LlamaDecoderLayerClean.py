@@ -25,6 +25,8 @@ from einops import rearrange
 from causal_conv1d import causal_conv1d_fn
 from kernel._2Mamba2Furious_square import _attention as _2Mamba2Furious_square
 from kernel._2Mamba2Furious_exp import _attention as _2Mamba2Furious_exp
+from kernel.LinearKernel import _attention as LinearKernel
+from kernel.LinearKernelAMask import _attention as LinearKernelAMask
 from Triton_Efficient_Kronecker_Product.kron import kron
 
 from mamba_ssm.ops.triton.ssd_combined import mamba_chunk_scan_combined
@@ -344,10 +346,9 @@ configs = {
         "use_D_res": False,
         "use_z_out_gate": False,
         "norm_type": "sm_norm",
-        "use_A_mask": False,
         "use_dt_bias": False,
-        "A_mask_value_dist_type": "none",
-        "A_mask_type": "discretize",
+        "value_disc_dtype": "none",
+        "A_mask_type": "none",
         "precompute_attn_mask": True,
     },
     
@@ -355,7 +356,7 @@ configs = {
     # - use output norm instead of sm norm
     # - do not use ReLU
     "linear__output_norm": {
-        "use_kernel": False,
+        "use_kernel": True,
         "power": "1",
         "qk_activation_type": "none",
         "use_in_conv": False,
@@ -364,17 +365,16 @@ configs = {
         "use_D_res": False,
         "use_z_out_gate": False,
         "norm_type": "output_norm",
-        "use_A_mask": False,
         "use_dt_bias": False,
-        "A_mask_value_dist_type": "none",
-        "A_mask_type": "discretize",
+        "value_disc_dtype": "none",
+        "A_mask_type": "none",
         "precompute_attn_mask": True,
     },
     
     # (5) Changes from linear:
     # - use output norm instead of sm norm
     "linear__output_norm__ReLU": {
-        "use_kernel": False,
+        "use_kernel": True,
         "power": "1",
         "qk_activation_type": "relu",
         "use_in_conv": False,
@@ -383,10 +383,9 @@ configs = {
         "use_D_res": False,
         "use_z_out_gate": False,
         "norm_type": "output_norm",
-        "use_A_mask": False,
         "use_dt_bias": False,
-        "A_mask_value_dist_type": "none",
-        "A_mask_type": "discretize",
+        "value_disc_dtype": "none",
+        "A_mask_type": "none",
         "precompute_attn_mask": True,
     },
     
@@ -395,7 +394,7 @@ configs = {
     # - use output norm instead of sm norm
     # - in conv (window size of 2)
     "linear__output_norm__in_conv_k_2": {
-        "use_kernel": False,
+        "use_kernel": True,
         "power": "1",
         "qk_activation_type": "none",
         "use_in_conv": True,
@@ -404,10 +403,9 @@ configs = {
         "use_D_res": False,
         "use_z_out_gate": False,
         "norm_type": "output_norm",
-        "use_A_mask": False,
         "use_dt_bias": False,
-        "A_mask_value_dist_type": "none",
-        "A_mask_type": "discretize",
+        "value_disc_dtype": "none",
+        "A_mask_type": "none",
         "precompute_attn_mask": True,
     },
     
@@ -416,7 +414,7 @@ configs = {
     # - use output norm instead of sm norm
     # - in conv (window size of 3)
     "linear__output_norm__in_conv_k_3": {
-        "use_kernel": False,
+        "use_kernel": True,
         "power": "1",
         "qk_activation_type": "none",
         "use_in_conv": True,
@@ -425,10 +423,9 @@ configs = {
         "use_D_res": False,
         "use_z_out_gate": False,
         "norm_type": "output_norm",
-        "use_A_mask": False,
         "use_dt_bias": False,
-        "A_mask_value_dist_type": "none",
-        "A_mask_type": "discretize",
+        "value_disc_dtype": "none",
+        "A_mask_type": "none",
         "precompute_attn_mask": True,
     },
     
@@ -438,7 +435,7 @@ configs = {
     # - in conv (window size of 3)
     # - silu activation function
     "linear__output_norm__in_conv_k_2__silu": {
-        "use_kernel": False,
+        "use_kernel": True,
         "power": "1",
         "qk_activation_type": "silu",
         "use_in_conv": True,
@@ -447,12 +444,251 @@ configs = {
         "use_D_res": False,
         "use_z_out_gate": False,
         "norm_type": "output_norm",
-        "use_A_mask": False,
         "use_dt_bias": False,
-        "A_mask_value_dist_type": "none",
+        "value_disc_dtype": "none",
+        "A_mask_type": "none",
+        "precompute_attn_mask": True,
+    },
+    
+    # (9) + D res
+    # Changes from linear:
+    # - use output norm instead of sm norm
+    # - D residual
+    "linear__output_norm__D_res": {
+        "use_kernel": True,
+        "power": "1",
+        "qk_activation_type": "none",
+        "use_in_conv": False,
+        "in_conv_dim": 2,
+        "use_NoPE": True,
+        "use_D_res": True,
+        "use_z_out_gate": False,
+        "norm_type": "output_norm",
+        "use_dt_bias": False,
+        "value_disc_dtype": "none",
+        "A_mask_type": "none",
+        "precompute_attn_mask": True,
+    },
+    
+    # (10) + Z gate
+    # Changes from linear:
+    # - use output norm instead of sm norm
+    # - Z output gate
+    "linear__output_norm__Z_out_gate": {
+        "use_kernel": True,
+        "power": "1",
+        "qk_activation_type": "none",
+        "use_in_conv": False,
+        "in_conv_dim": 2,
+        "use_NoPE": True,
+        "use_D_res": False,
+        "use_z_out_gate": True,
+        "norm_type": "output_norm",
+        "use_dt_bias": False,
+        "value_disc_dtype": "none",
+        "A_mask_type": "none",
+        "precompute_attn_mask": True,
+    },
+    
+    # (11) + dt on values
+    # Changes from linear:
+    # - use output norm instead of sm norm
+    # - dt on values (dt)
+    "linear__output_norm__dt_on_values": {
+        "use_kernel": True,
+        "power": "1",
+        "qk_activation_type": "none",
+        "use_in_conv": False,
+        "in_conv_dim": 2,
+        "use_NoPE": True,
+        "use_D_res": False,
+        "use_z_out_gate": False,
+        "norm_type": "output_norm",
+        "use_dt_bias": False,
+        "value_disc_dtype": "dt",
+        "A_mask_type": "none",
+        "precompute_attn_mask": True,
+    },
+    
+    # (12) + A mask (dt method from mamba 2)
+    # Changes from linear:
+    # - use output norm instead of sm norm
+    # - use A mask (Mamba 2 discretize method)
+    "linear__output_norm__A_mask_type_discretize": {
+        "use_kernel": True,
+        "power": "1",
+        "qk_activation_type": "none",
+        "use_in_conv": False,
+        "in_conv_dim": 2,
+        "use_NoPE": True,
+        "use_D_res": False,
+        "use_z_out_gate": False,
+        "norm_type": "output_norm",
+        "use_dt_bias": False,
+        "value_disc_dtype": "none",
         "A_mask_type": "discretize",
         "precompute_attn_mask": True,
     },
+    
+    # (13) + A mask (neg_softplus method)
+    # Changes from linear:
+    # - use output norm instead of sm norm
+    # - use A mask (neg_softplus method)
+    "linear__output_norm__A_mask_type_neg_softplus": {
+        "use_kernel": True,
+        "power": "1",
+        "qk_activation_type": "none",
+        "use_in_conv": False,
+        "in_conv_dim": 2,
+        "use_NoPE": True,
+        "use_D_res": False,
+        "use_z_out_gate": False,
+        "norm_type": "output_norm",
+        "use_dt_bias": False,
+        "value_disc_dtype": "none",
+        "A_mask_type": "neg_softplus",
+        "precompute_attn_mask": True,
+    },
+    
+    
+    
+    
+    
+    
+    
+    # (14) + in conv + A mask (method 12, with dt)
+    # Changes from linear:
+    # - use output norm instead of sm norm
+    # - use A mask (Mamba 2 discretize method)
+    # - in conv (window size of 2)
+    "linear__output_norm__A_mask_type_discretize__in_conv_k_2": {
+        "use_kernel": True,
+        "power": "1",
+        "qk_activation_type": "none",
+        "use_in_conv": True,
+        "in_conv_dim": 2,
+        "use_NoPE": True,
+        "use_D_res": False,
+        "use_z_out_gate": False,
+        "norm_type": "output_norm",
+        "use_dt_bias": False,
+        "value_disc_dtype": "none",
+        "A_mask_type": "discretize",
+        "precompute_attn_mask": True,
+    },
+    
+    # (15) + in conv + A mask (method 13, with A proj)
+    # Changes from linear:
+    # - use output norm instead of sm norm
+    # - use A mask (neg_softplus method)
+    # - in conv (window size of 2)
+    "linear__output_norm__A_mask_type_neg_softplus__in_conv_k_2": {
+        "use_kernel": True,
+        "power": "1",
+        "qk_activation_type": "none",
+        "use_in_conv": True,
+        "in_conv_dim": 2,
+        "use_NoPE": True,
+        "use_D_res": False,
+        "use_z_out_gate": False,
+        "norm_type": "output_norm",
+        "use_dt_bias": False,
+        "value_disc_dtype": "none",
+        "A_mask_type": "neg_softplus",
+        "precompute_attn_mask": True,
+    },
+    
+    # (16) + in conv + A mask (method 13, with A proj) + discretize values 
+    # Changes from linear:
+    # - use output norm instead of sm norm
+    # - use A mask (neg_softplus method)
+    # - in conv (window size of 2)
+    # - dt on values (dt)
+    "linear__output_norm__A_mask_type_neg_softplus__in_conv_k_2__dt_on_values": {
+        "use_kernel": True,
+        "power": "1",
+        "qk_activation_type": "none",
+        "use_in_conv": True,
+        "in_conv_dim": 2,
+        "use_NoPE": True,
+        "use_D_res": False,
+        "use_z_out_gate": False,
+        "norm_type": "output_norm",
+        "use_dt_bias": False,
+        "value_disc_dtype": "dt",
+        "A_mask_type": "neg_softplus",
+        "precompute_attn_mask": True,
+    },
+    
+    # (17) + in conv + A mask (method 13, with A proj) + discretize values + conv activation
+    # Changes from linear:
+    # - use output norm instead of sm norm
+    # - use A mask (neg_softplus method)
+    # - in conv (window size of 2)
+    # - dt on values (dt)
+    # - silu activation function
+    "linear__output_norm__A_mask_type_neg_softplus__in_conv_k_2__dt_on_values__silu": {
+        "use_kernel": True,
+        "power": "1",
+        "qk_activation_type": "silu",
+        "use_in_conv": True,
+        "in_conv_dim": 2,
+        "use_NoPE": True,
+        "use_D_res": False,
+        "use_z_out_gate": False,
+        "norm_type": "output_norm",
+        "use_dt_bias": False,
+        "value_disc_dtype": "dt",
+        "A_mask_type": "neg_softplus",
+        "precompute_attn_mask": True,
+    },
+    
+    # (18) + in conv + A mask (method 13, with A proj) + discretize values + D res
+    # Changes from linear:
+    # - use output norm instead of sm norm
+    # - use A mask (neg_softplus method)
+    # - in conv (window size of 2)
+    # - dt on values (dt)
+    # - D res
+    "linear__output_norm__A_mask_type_neg_softplus__in_conv_k_2__dt_on_values__D_res": {
+        "use_kernel": True,
+        "power": "1",
+        "qk_activation_type": "none",
+        "use_in_conv": True,
+        "in_conv_dim": 2,
+        "use_NoPE": True,
+        "use_D_res": True,
+        "use_z_out_gate": False,
+        "norm_type": "output_norm",
+        "use_dt_bias": False,
+        "value_disc_dtype": "dt",
+        "A_mask_type": "neg_softplus",
+        "precompute_attn_mask": True,
+    },
+    
+    # (19) + in conv + A mask (method 13, with A proj) + discretize values + Z gate
+    # Changes from linear:
+    # - use output norm instead of sm norm
+    # - use A mask (neg_softplus method)
+    # - in conv (window size of 2)
+    # - dt on values (dt)
+    # - Z output gate
+    "linear__output_norm__A_mask_type_neg_softplus__in_conv_k_2__dt_on_values__Z_out_gate": {
+        "use_kernel": True,
+        "power": "1",
+        "qk_activation_type": "none",
+        "use_in_conv": True,
+        "in_conv_dim": 2,
+        "use_NoPE": True,
+        "use_D_res": False,
+        "use_z_out_gate": True,
+        "norm_type": "output_norm",
+        "use_dt_bias": False,
+        "value_disc_dtype": "dt",
+        "A_mask_type": "neg_softplus",
+        "precompute_attn_mask": True,
+    },
+    
 }
 
 
@@ -500,7 +736,6 @@ class LlamaAttention(nn.Module):
         # self.use_output_norm = False
         
         # # Only for A masking
-        # self.use_A_mask = False
         # self.dt_bias = False # Adds a bias to the dt value, pre softplus
         # """
         # Discretizes the values. 
@@ -513,8 +748,8 @@ class LlamaAttention(nn.Module):
         # - "softplus2" - values = values*softplus(values)
         # - "none" - No discretization
         # """
-        # self.A_mask_value_dist_type = "none"
-        # # self.A_mask_value_dist_type = "dt"
+        # self.value_disc_dtype = "none"
+        # # self.value_disc_dtype = "dt"
         # self.clamp_dt = False
         # """
         # A mask types can be one of (only if A mask is used)
@@ -532,7 +767,8 @@ class LlamaAttention(nn.Module):
         
         
         # Params from config -->
-        layer_config = configs["linear__output_norm__ReLU"]
+        # layer_config = configs["linear__output_norm__ReLU"]
+        layer_config = configs[config.attention_type]
         
         # True to use a kernel. False to use torch ops
         self.use_kernel = layer_config["use_kernel"]
@@ -566,8 +802,7 @@ class LlamaAttention(nn.Module):
         self.norm_type = layer_config["norm_type"]
         assert self.norm_type in ["sm_norm", "output_norm"]
         
-        # Only for A masking
-        self.use_A_mask = layer_config["use_A_mask"]
+        # dt bias
         self.dt_bias = layer_config["use_dt_bias"] # Adds a bias to the dt value, pre softplus
         """
         Discretizes the values. 
@@ -580,9 +815,9 @@ class LlamaAttention(nn.Module):
         - "softplus2" - values = values*softplus(values)
         - "none" - No discretization
         """
-        self.A_mask_value_dist_type = layer_config["A_mask_value_dist_type"]
-        # self.A_mask_value_dist_type = "dt"
-        assert self.A_mask_value_dist_type in ["dt", "sigmoid", "silu", "softplus", "softplus2", "none"]
+        self.value_disc_dtype = layer_config["value_disc_dtype"]
+        # self.value_disc_dtype = "dt"
+        assert self.value_disc_dtype in ["dt", "sigmoid", "silu", "softplus", "softplus2", "none"]
         self.clamp_dt = False
         """
         A mask types can be one of (only if A mask is used)
@@ -592,10 +827,11 @@ class LlamaAttention(nn.Module):
         - "neg_softplus_dt" - A_mask = -softplus(A) * dt
         - "neg_softplus2" - A_mask = -A*softplus(A)
         - "neg_silu" - A_mask = -silu(A)
+        - "none" - No A mask
         """
         self.A_mask_type = layer_config["A_mask_type"]
         # self.A_mask_type = "neg_softplus"
-        assert self.A_mask_type in ["discretize", "neg_softplus", "neg_softplus_dt", "neg_softplus2", "neg_silu"]
+        assert self.A_mask_type in ["none", "discretize", "neg_softplus", "neg_softplus_dt", "neg_softplus2", "neg_silu"]
 
 
 
@@ -618,72 +854,45 @@ class LlamaAttention(nn.Module):
 
 
         # Combine the QKV projections
-        all_dim = config.num_attention_heads * self.head_dim + 2 * config.num_key_value_heads * self.head_dim
-        if self.use_A_mask:
-            all_dim_ = all_dim
-            all_dim = all_dim + config.num_attention_heads
-            
-            # We only have A_log if we are using
-            # "discretize" for A_mask_type
-            if self.A_mask_type == "discretize":
-                self.A_log = nn.Parameter(
-                    torch.empty(config.num_attention_heads, dtype=torch.float32).uniform_(1, 16).log()
-                )
-            # Otherwise, we increase the all dimension dimension
-            # by adding H more params
-            else:
-                all_dim = all_dim + config.num_attention_heads
-            
-            # Bias
-            if self.dt_bias:
-                # Initialize log dt bias
-                dt_max = 0.1
-                dt_min = 0.001
-                dt = torch.exp(
-                    torch.rand(config.num_attention_heads) * (math.log(dt_max) - math.log(dt_min))
-                    + math.log(dt_min)
-                )
-                dt = torch.clamp(dt, min=1e-4)
-                # Inverse of softplus: https://github.com/pytorch/pytorch/issues/72759
-                inv_dt = dt + torch.log(-torch.expm1(-dt))
-                self.dt_bias_value = nn.Parameter(inv_dt[None, None, :])
-                # Just to be explicit. Without this we already don't put wd on dt_bias because of the check
-                # name.endswith("bias") in param_grouping.py
-                self.dt_bias_value._no_weight_decay = True
-            else:
-                self.dt_bias_value = 0
+        qkv_dim = config.num_attention_heads * self.head_dim + 2 * config.num_key_value_heads * self.head_dim
         self.q_size = config.num_attention_heads * self.head_dim
         self.kv_size = config.num_key_value_heads * self.head_dim
         
         # Input and output projections
         self.qkv_proj = nn.Linear(
-            config.hidden_size, all_dim, bias=config.attention_bias
+            config.hidden_size, qkv_dim, bias=config.attention_bias
         )
         self.o_proj = nn.Linear(
             config.num_attention_heads * self.head_dim, config.hidden_size, bias=config.attention_bias
         )
+        
+        # A mask projection
+        if self.A_mask_type != "none":
+            # We only have A_log if we are using
+            # "discretize" for A_mask_type
+            # This will create A mask via the dt projection
+            if self.A_mask_type == "discretize":
+                self.A_log = nn.Parameter(
+                    torch.empty(config.num_attention_heads, dtype=torch.float32).uniform_(1, 16).log()
+                )
+            # Otherwise, we have a projection for the A mask
+            # by itself (adding H more params)
+            else:
+                self.A_mask_proj = nn.Linear(
+                    config.hidden_size, config.num_attention_heads, bias=config.attention_bias
+                )
 
         # Input convolution
         if self.use_in_conv:
             d_conv = int(self.in_conv_dim)
-            if self.use_A_mask:
-                self.conv1d = nn.Conv1d(
-                    in_channels=all_dim_,
-                    out_channels=all_dim_,
-                    bias=True,
-                    kernel_size=d_conv,
-                    groups=all_dim_,
-                    padding=d_conv - 1,
-                )
-            else:
-                self.conv1d = nn.Conv1d(
-                    in_channels=all_dim,
-                    out_channels=all_dim,
-                    bias=True,
-                    kernel_size=d_conv,
-                    groups=all_dim,
-                    padding=d_conv - 1,
-                )
+            self.conv1d = nn.Conv1d(
+                in_channels=qkv_dim,
+                out_channels=qkv_dim,
+                bias=True,
+                kernel_size=d_conv,
+                groups=qkv_dim,
+                padding=d_conv - 1,
+            )
 
             global causal_conv1d_fn
             from causal_conv1d import causal_conv1d_fn
@@ -698,6 +907,41 @@ class LlamaAttention(nn.Module):
             self.qk_act = torch.nn.Identity()
         else:
             assert False
+            
+        # dt projection
+        if self.value_disc_dtype == "dt" \
+            or self.value_disc_dtype == "sigmoid" \
+            or self.A_mask_type == "discretize" \
+            or self.A_mask_type == "neg_softplus_dt":
+            
+            self.dt_proj = nn.Linear(
+                config.hidden_size, config.num_attention_heads, bias=config.attention_bias
+            )
+        
+        # dt bias
+        if self.dt_bias:
+            assert self.value_disc_dtype == "dt" \
+                or self.value_disc_dtype == "sigmoid" \
+                or self.A_mask_type == "discretize" \
+                or self.A_mask_type == "neg_softplus_dt", \
+                "dt bias can only be added when dt is used"
+            
+            # Initialize log dt bias
+            dt_max = 0.1
+            dt_min = 0.001
+            dt = torch.exp(
+                torch.rand(config.num_attention_heads) * (math.log(dt_max) - math.log(dt_min))
+                + math.log(dt_min)
+            )
+            dt = torch.clamp(dt, min=1e-4)
+            # Inverse of softplus: https://github.com/pytorch/pytorch/issues/72759
+            inv_dt = dt + torch.log(-torch.expm1(-dt))
+            self.dt_bias_value = nn.Parameter(inv_dt[None, None, :])
+            # Just to be explicit. Without this we already don't put wd on dt_bias because of the check
+            # name.endswith("bias") in param_grouping.py
+            self.dt_bias_value._no_weight_decay = True
+        else:
+            self.dt_bias_value = 0
             
         # D residual
         if self.use_D_res:
@@ -715,7 +959,7 @@ class LlamaAttention(nn.Module):
             
         
         # Precompute attention mask if we are not using a kernel
-        if not self.use_kernel:
+        if not self.use_kernel or True:
             max_seq_len = config.max_position_embeddings
             self.register_buffer(
                 "attn_mask",
@@ -737,48 +981,8 @@ class LlamaAttention(nn.Module):
         hidden_shape = (*input_shape, -1, self.head_dim)
 
 
-        # Combined QKV
+        # Combined QKV proj
         QKV = self.qkv_proj(hidden_states)
-        if self.use_A_mask:
-            # Get dt projection
-            if self.A_mask_value_dist_type == "sigmoid":
-                dt = torch.nn.functional.sigmoid(QKV[:, :, -self.config.num_attention_heads:] + self.dt_bias_value)
-            else:
-                dt = torch.nn.functional.softplus(QKV[:, :, -self.config.num_attention_heads:] + self.dt_bias_value)
-            QKV = QKV[:, :, :-self.config.num_attention_heads]
-            
-            # Clamping dt
-            if self.clamp_dt:
-                dt = dt.clamp(max=10)
-            
-            # If the mask type is "discretize", we calculate the
-            # mask like normal
-            # A_mask = -exp(A)*dt
-            if self.A_mask_type == "discretize":
-                A = -torch.exp(self.A_log)[None, None, :]*dt
-            # Otherwise, we get the additional A projection
-            # and calculate the A mask with that
-            else:
-                # Get A mask projection
-                A = QKV[:, :, -self.config.num_attention_heads:]
-                QKV = QKV[:, :, :-self.config.num_attention_heads]
-                
-                # A_mask = -softplus(A)
-                if self.A_mask_type == "neg_softplus":
-                    A = -torch.nn.functional.softplus(A)
-                # A_mask = -softplus(A)
-                elif self.A_mask_type == "neg_softplus_dt":
-                    A = -torch.nn.functional.softplus(A) * dt
-                # A_mask = -A*softplus(A)
-                elif self.A_mask_type == "neg_softplus2":
-                    A = -A*torch.nn.functional.softplus(A)
-                # A_mask = -silu(A) = -A*sigmoid(A)
-                elif self.A_mask_type == "neg_silu":
-                    A = -torch.nn.functional.silu(A)
-                else:
-                    assert False
-        else:
-            A = None
 
         # Apply input convolution
         if self.use_in_conv:
@@ -799,20 +1003,69 @@ class LlamaAttention(nn.Module):
         key_states = key_states.view(hidden_shape).transpose(1, 2)
         value_states = value_states.view(hidden_shape).transpose(1, 2)
 
+        # Get dt
+        if self.value_disc_dtype == "dt" \
+            or self.value_disc_dtype == "sigmoid" \
+            or self.A_mask_type == "discretize" \
+            or self.A_mask_type == "neg_softplus_dt":
+            
+            # dt projection
+            dt = self.dt_proj(hidden_states)
+                
+            # transform dt
+            if self.value_disc_dtype == "sigmoid":
+                dt = torch.nn.functional.sigmoid(dt + self.dt_bias_value)
+            else:
+                dt = torch.nn.functional.softplus(dt + self.dt_bias_value)
+            
+            # Clamping dt
+            if self.clamp_dt:
+                dt = dt.clamp(max=10)
+                
+        # Get A mask
+        if self.A_mask_type != "none":
+            # If the mask type is "discretize", we calculate the
+            # mask like normal
+            # A_mask = -exp(A)*dt
+            if self.A_mask_type == "discretize":
+                A = -torch.exp(self.A_log)[None, None, :]*dt
+            # Otherwise, we get the additional A projection
+            # and calculate the A mask with that
+            else:
+                # Get A mask projection
+                A = self.A_mask_proj(hidden_states)
+                
+                # A_mask = -softplus(A)
+                if self.A_mask_type == "neg_softplus":
+                    A = -torch.nn.functional.softplus(A)
+                # A_mask = -softplus(A)
+                elif self.A_mask_type == "neg_softplus_dt":
+                    A = -torch.nn.functional.softplus(A) * dt
+                # A_mask = -A*softplus(A)
+                elif self.A_mask_type == "neg_softplus2":
+                    A = -A*torch.nn.functional.softplus(A)
+                # A_mask = -silu(A) = -A*sigmoid(A)
+                elif self.A_mask_type == "neg_silu":
+                    A = -torch.nn.functional.silu(A)
+                else:
+                    assert False
+        else:
+            A = None
+
         # D res comes from multiplying D with the values before transforming the values at all
         if self.use_D_res:
             D_res = value_states * self.D[None, :, None, :,]
 
         # Discretization for value heads as done in Mamba
-        if self.use_A_mask and self.A_mask_value_dist_type != "none":
-            assert self.A_mask_value_dist_type in ["dt", "silu", "softplus", "softplus2", "sigmoid"]
-            if self.A_mask_value_dist_type == "dt" or self.A_mask_value_dist_type == "sigmoid":
+        if self.value_disc_dtype != "none":
+            assert self.value_disc_dtype in ["dt", "silu", "softplus", "softplus2", "sigmoid"]
+            if self.value_disc_dtype == "dt" or self.value_disc_dtype == "sigmoid":
                 value_states = value_states * dt.mT[..., None]
-            elif self.A_mask_value_dist_type == "silu":
+            elif self.value_disc_dtype == "silu":
                 value_states = torch.nn.functional.silu(value_states)
-            elif self.A_mask_value_dist_type == "softplus":
+            elif self.value_disc_dtype == "softplus":
                 value_states = torch.nn.functional.softplus(value_states)
-            elif self.A_mask_value_dist_type == "softplus2":
+            elif self.value_disc_dtype == "softplus2":
                 value_states = value_states*torch.nn.functional.softplus(value_states)
             else:
                 assert False
@@ -841,7 +1094,7 @@ class LlamaAttention(nn.Module):
                 attn_weights = (query_states @ key_states.mT * (1/math.sqrt(key_states.shape[-1])))**int(self.power)
             
             # Apply A mask
-            if self.use_A_mask:
+            if self.A_mask_type != "none":
                 A_cumsum = torch.cumsum(A.float(), dim=-2).mT
                 A_mask = (((A_cumsum[:, :, :, None] - A_cumsum[:, :, None, :]))).masked_fill(attention_mask.bool(), -torch.inf).exp().to(query_states.dtype)
                 attn_weights = attn_weights * A_mask
@@ -874,14 +1127,38 @@ class LlamaAttention(nn.Module):
             #     z=self.z_gate_proj(hidden_states).view(hidden_shape) if self.use_z_out_gate else None,
             # ).transpose(1, 2)
             # attention_mask = ~torch.tril(torch.ones(query_states.shape[2], query_states.shape[2])).bool().repeat(query_states.shape[0], query_states.shape[1], 1, 1).to(query_states.device)
-            attn_output = torch.utils.checkpoint.checkpoint(
-                forwrd_gated,
-                query_states,
-                key_states,
-                value_states,
-                self.attn_mask.clone(),
-                A
-            )
+            
+            # Kernel, no A mask
+            if self.use_kernel and A is None:
+                attn_output = LinearKernel.apply(
+                    query_states.half(), 
+                    key_states.half(), 
+                    value_states.half(), 
+                    True, 
+                    (1/math.sqrt(key_states.shape[-1])), 
+                    False
+                )
+            # Kernel with A mask
+            elif self.use_kernel and A is not None:
+                attn_output = LinearKernelAMask.apply(
+                    query_states.half(), 
+                    key_states.half(), 
+                    value_states.half(), 
+                    A.mT.float().cumsum(-1),
+                    True, 
+                    (1/math.sqrt(key_states.shape[-1])), 
+                    False
+                )
+            # No kernel
+            else:
+                attn_output = torch.utils.checkpoint.checkpoint(
+                    forwrd_gated,
+                    query_states,
+                    key_states,
+                    value_states,
+                    self.attn_mask.clone(),
+                    A
+                )
         elif self.power == "2":
             A_cumsum = A.mT.float().cumsum(-1)
             attn_output = _2Mamba2Furious_square.apply(query_states.half(), key_states.half(), value_states.half(), A_cumsum.float(), True, 1/math.sqrt(key_states.shape[-1]), False)
@@ -897,7 +1174,7 @@ class LlamaAttention(nn.Module):
         # torch.save(query_states, "debug_output/query_states")
         # torch.save(key_states, "debug_output/key_states")
         # torch.save(value_states, "debug_output/value_states")
-        # torch.save(A_cumsum, "debug_output/A_cumsum")
+        # torch.save(A.mT.float().cumsum(-1), "debug_output/A_cumsum")
         
         
         # Apply the D residual
@@ -1020,7 +1297,7 @@ if __name__ == "__main__":
             "torch_dtype": "float16",
             "use_cache": True,
             "vocab_size": 1024,
-            "attention_type": "softmax",
+            "attention_type": "linear__output_norm__in_conv_k_2__silu",
         })
     layer = LlamaDecoderLayer(config=config, layer_idx=0).cuda()
     hidden_states = torch.randn(B, L, d).cuda()

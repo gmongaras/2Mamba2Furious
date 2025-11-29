@@ -646,9 +646,9 @@ class Trainer():
             labels = batch["labels"].to(self.model.device)
         
             with torch.autocast(device_type='cuda', dtype=torch.bfloat16) if self.use_amp else nullcontext():
-                # input_ids = torch.load("debug_output/input_ids", map_location=str(labels.device))
-                # attention_mask = torch.load("debug_output/attention_mask", map_location=str(labels.device))
-                # labels = torch.load("debug_output/labels", map_location=str(labels.device))
+                # input_ids = torch.load("debug_output/0/input_ids", map_location=str(labels.device))
+                # attention_mask = torch.load("debug_output/0/attention_mask", map_location=str(labels.device))
+                # labels = torch.load("debug_output/0/labels", map_location=str(labels.device))
                 
                 outputs = self.model(input_ids, attention_mask=attention_mask if self.pass_mask else None).logits
                 
