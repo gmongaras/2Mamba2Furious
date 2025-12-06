@@ -693,7 +693,7 @@ class Trainer():
             else:
                 loss.backward()
                 
-            if True in [i.grad.isnan().any().item() for i in self.model.parameters()]:
+            if True in [i.grad.isnan().any().item() for i in self.model.parameters() if i.requires_grad == True]:
                 num_nan_grad_steps += 1
                 
             # Save input and model on nan for debugging

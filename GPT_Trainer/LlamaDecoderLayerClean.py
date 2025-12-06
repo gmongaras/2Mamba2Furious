@@ -27,9 +27,12 @@ from kernel._2Mamba2Furious_square import _attention as _2Mamba2Furious_square
 from kernel._2Mamba2Furious_exp import _attention as _2Mamba2Furious_exp
 from kernel.LinearKernel import _attention as LinearKernel
 from kernel.LinearKernelAMask import _attention as LinearKernelAMask
+from kernel.SquaredKernelAMask import _attention as SquaredKernelAMask
 from Triton_Efficient_Kronecker_Product.kron import kron
 
 from mamba_ssm.ops.triton.ssd_combined import mamba_chunk_scan_combined
+
+from rotary_embedding_torch import RotaryEmbedding
 
 
 
@@ -335,6 +338,16 @@ def eager_attention_forward(
 
 # Configs for various linear attention types
 configs = {
+    # (1) Full softmax attention
+    "softmax": {
+        "full_softmax_attention": True
+    },
+    
+    # (2) Full mamba
+    "mamba": {
+        "full_mamba": True
+    },
+    
     # (3) Just normal linear attentio 
     "linear": {
         "use_kernel": False, 
@@ -689,6 +702,62 @@ configs = {
         "precompute_attn_mask": True,
     },
     
+    
+    
+    
+    
+    
+    
+    
+    
+    ### Squared kernels
+    
+    # (20) - (method 16 with A mask, in conv, and dt) + squared + output norm
+    # Changes from linear:
+    # - qk squared
+    # - use output norm
+    # - use A mask (neg_softplus method)
+    # - in conv (window size of 2)
+    # - dt on values (dt)
+    "squared__output_norm__A_mask_type_neg_softplus__in_conv_k_2__dt_on_values": {
+        "use_kernel": True,
+        "power": "2",
+        "qk_activation_type": "none",
+        "use_in_conv": True,
+        "in_conv_dim": 2,
+        "use_NoPE": True,
+        "use_D_res": False,
+        "use_z_out_gate": False,
+        "norm_type": "output_norm",
+        "use_dt_bias": False,
+        "value_disc_dtype": "dt",
+        "A_mask_type": "neg_softplus",
+        "precompute_attn_mask": True,
+    },
+    
+    # (21) - (method 16 with A mask, in conv, and dt) + squared + sm norm
+    # Changes from linear:
+    # - qk squared
+    # - use sm norm
+    # - use A mask (neg_softplus method)
+    # - in conv (window size of 2)
+    # - dt on values (dt)
+    "squared__sm_norm__A_mask_type_neg_softplus__in_conv_k_2__dt_on_values": {
+        "use_kernel": True,
+        "power": "2",
+        "qk_activation_type": "none",
+        "use_in_conv": True,
+        "in_conv_dim": 2,
+        "use_NoPE": True,
+        "use_D_res": False,
+        "use_z_out_gate": False,
+        "norm_type": "sm_norm",
+        "use_dt_bias": False,
+        "value_disc_dtype": "dt",
+        "A_mask_type": "neg_softplus",
+        "precompute_attn_mask": True,
+    },
+    
 }
 
 
@@ -705,70 +774,84 @@ class LlamaAttention(nn.Module):
         super().__init__()
         self.config = config
         self.layer_idx = layer_idx
-
-
-
-
-
-
-
-
-
-        # Params -->
-        # self.power = "1" # Can be one of "1", "2", or "exp"
         
-        # # True to use softmax style norm, False otherwise
-        # self.use_sm_norm = False
         
-        # # True to use the input time convolution on QKV, False to have no input conv
-        # self.in_conv = False
         
-        # # Use No poisitional encodings? If False, RoPE is used.
-        # self.NoPE = True
-        
-        # # Use D residual or not?
-        # self.use_D_res = False
-        
-        # # Add the z output gate or not?
-        # self.use_z_out_gate = False
-        
-        # # Use an output norm?
-        # self.use_output_norm = False
-        
-        # # Only for A masking
-        # self.dt_bias = False # Adds a bias to the dt value, pre softplus
-        # """
-        # Discretizes the values. 
-        # "dt" is what mamba uses
-        # Can take on one of:
-        # - "dt" - values = values * dt = values * softplus(dt)
-        # - "sigmoid" - values = values * sigmoid(dt)
-        # - "silu" - values = silu(values)
-        # - "softplus" - values = softplus(values)
-        # - "softplus2" - values = values*softplus(values)
-        # - "none" - No discretization
-        # """
-        # self.value_disc_dtype = "none"
-        # # self.value_disc_dtype = "dt"
-        # self.clamp_dt = False
-        # """
-        # A mask types can be one of (only if A mask is used)
-        # "discretize" is what mamba uses
-        # - "discretize" - Normal A mask: A_mask = -exp(A_log) * dt
-        # - "neg_softplus" - A_mask = -softplus(A)
-        # - "neg_softplus_dt" - A_mask = -softplus(A) * dt
-        # - "neg_softplus2" - A_mask = -A*softplus(A)
-        # - "neg_silu" - A_mask = -silu(A)
-        # """
-        # self.A_mask_type = "discretize"
-        # # self.A_mask_type = "neg_softplus"
+        # Bunch o stuff >w<
+        self.head_dim = config.hidden_size // config.num_attention_heads
+        self.num_heads = config.num_attention_heads
+        self.num_key_value_groups = config.num_attention_heads // config.num_key_value_heads
+        self.is_causal = True
+        self.attention_type = config.attention_type
+        self.do_softmax_attention = False
+        self.do_mamba = False
+
         
         
         
         
         # Params from config -->
-        # layer_config = configs["linear__output_norm__ReLU"]
         layer_config = configs[config.attention_type]
+        
+        
+        
+        # Fast path - 
+        # Full softmax attention will use RoPE and just have
+        # the normal qkv projection + output projection
+        if "full_softmax_attention" in layer_config.keys() and layer_config["full_softmax_attention"] == True:
+            self.do_softmax_attention = True
+            
+            # RoPE
+            self.rotary_emb = RotaryEmbedding(dim = self.head_dim)
+            
+            # Input and output projections
+            qkv_dim = config.num_attention_heads * self.head_dim + 2 * config.num_key_value_heads * self.head_dim
+            self.q_size = config.num_attention_heads * self.head_dim
+            self.kv_size = config.num_key_value_heads * self.head_dim
+            self.qkv_proj = nn.Linear(
+                config.hidden_size, qkv_dim, bias=config.attention_bias
+            )
+            self.o_proj = nn.Linear(
+                config.num_attention_heads * self.head_dim, config.hidden_size, bias=config.attention_bias
+            )
+            
+            return
+            
+        
+        # Fast path - 
+        # Full mamba will just use the mamba kernel from the official repo
+        if "full_mamba" in layer_config.keys() and layer_config["full_mamba"] == True:
+            from mamba_ssm import Mamba2
+            
+            self.do_mamba = True
+            
+            self.mamba_layer = Mamba2(
+                # This module uses roughly 3 * expand * d_model^2 parameters
+                d_model=config.hidden_size,
+                d_conv=2,
+                conv_init=None,
+                expand=1,
+                headdim=config.head_dim,
+                d_ssm=config.head_dim,
+                ngroups=1,
+                A_init_range=(1, 16),
+                D_has_hdim=True,
+                rmsnorm=True,
+                norm_before_gate=False,
+                dt_min=0.001,
+                dt_max=0.1,
+                dt_init_floor=0.0001,
+                dt_limit=(0, float("inf")),
+                bias=False,
+                conv_bias=False,
+                chunk_size=256,
+                use_mem_eff_path=True,
+                layer_idx=layer_idx,
+            )
+            
+            return
+        
+        
         
         # True to use a kernel. False to use torch ops
         self.use_kernel = layer_config["use_kernel"]
@@ -787,6 +870,8 @@ class LlamaAttention(nn.Module):
         
         # Use No poisitional encodings? If False, RoPE is used.
         self.NoPE = layer_config["use_NoPE"]
+        if not self.NoPE:
+            self.rotary_emb = RotaryEmbedding(dim = self.head_dim)
         
         # Use D residual or not?
         self.use_D_res = layer_config["use_D_res"]
@@ -832,22 +917,6 @@ class LlamaAttention(nn.Module):
         self.A_mask_type = layer_config["A_mask_type"]
         # self.A_mask_type = "neg_softplus"
         assert self.A_mask_type in ["none", "discretize", "neg_softplus", "neg_softplus_dt", "neg_softplus2", "neg_silu"]
-
-
-
-
-
-
-
-
-        # Bunch o stuff >w<
-        self.head_dim = getattr(config, "head_dim", config.hidden_size // config.num_attention_heads)
-        self.num_heads = config.num_attention_heads
-        self.num_key_value_groups = config.num_attention_heads // config.num_key_value_heads
-        self.scaling = self.head_dim**-0.5
-        self.attention_dropout = config.attention_dropout
-        self.is_causal = True
-        self.attention_type = config.attention_type
 
 
 
@@ -979,6 +1048,66 @@ class LlamaAttention(nn.Module):
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
         input_shape = hidden_states.shape[:-1]
         hidden_shape = (*input_shape, -1, self.head_dim)
+        
+        
+        
+        
+        
+        
+        # Fast path - full softmax attention
+        if self.do_softmax_attention:
+            # Combined QKV proj
+            QKV = self.qkv_proj(hidden_states)
+
+            # Get QKV tensors
+            query_states = QKV[:, :, :self.q_size]
+            key_states = QKV[:, :, self.q_size:self.q_size+self.kv_size]
+            value_states = QKV[:, :, self.q_size+self.kv_size:]
+            
+            # Add heads
+            query_states = query_states.view(hidden_shape).transpose(1, 2)
+            key_states = key_states.view(hidden_shape).transpose(1, 2)
+            value_states = value_states.view(hidden_shape).transpose(1, 2)
+            
+            # RoPE
+            query_states = self.rotary_emb.rotate_queries_or_keys(query_states)
+            key_states = self.rotary_emb.rotate_queries_or_keys(key_states)
+            
+            # spda because I don't feel like writing a kernel
+            def forward_(query, key, value, scale):
+                return torch.nn.functional.scaled_dot_product_attention(
+                                query, 
+                                key, 
+                                value, 
+                                attn_mask=None, 
+                                dropout_p=0.0, 
+                                is_causal=True, 
+                                scale=scale, 
+                                enable_gqa=False
+                )
+            attn_output = checkpoint(
+                forward_, query_states, key_states, value_states, (1/math.sqrt(key_states.shape[-1])),
+            )
+            
+            # Remove heads
+            attn_output = attn_output.transpose(1, 2).reshape(*input_shape, -1).contiguous()
+
+            # Output projection
+            return self.o_proj(attn_output), None
+        
+        # Fast path - Full mamba
+        if self.do_mamba:
+            def forward_(hidden_states):
+                return self.mamba_layer(hidden_states)
+            
+            attn_output = checkpoint(
+                forward_, hidden_states,
+            )
+            return attn_output, None
+        
+        
+        
+        
 
 
         # Combined QKV proj
@@ -1076,8 +1205,8 @@ class LlamaAttention(nn.Module):
 
         # RoPE
         if not self.NoPE:
-            cos, sin = position_embeddings
-            query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
+            query_states = self.rotary_emb.rotate_queries_or_keys(query_states)
+            key_states = self.rotary_emb.rotate_queries_or_keys(key_states)
             
         # Create z output gate
         if self.use_z_out_gate:
@@ -1114,59 +1243,110 @@ class LlamaAttention(nn.Module):
             
         
         assert self.power in ["1", "2", "exp"]
-        if self.power == "1":
-            # # Mamba kernel equivalence assuming use_sm_norm is set to False
-            # out_mamba = mamba_chunk_scan_combined(
-            #     (value_states / dt.mT[..., None]).transpose(1, 2),
-            #     dt,
-            #     -torch.exp(self.A_log),
-            #     key_states.transpose(1, 2) * (1/math.sqrt(key_states.shape[-1])),
-            #     query_states.transpose(1, 2),
-            #     chunk_size=32,
-            #     D=self.D if self.use_D_res else None,
-            #     z=self.z_gate_proj(hidden_states).view(hidden_shape) if self.use_z_out_gate else None,
-            # ).transpose(1, 2)
-            # attention_mask = ~torch.tril(torch.ones(query_states.shape[2], query_states.shape[2])).bool().repeat(query_states.shape[0], query_states.shape[1], 1, 1).to(query_states.device)
-            
-            # Kernel, no A mask
-            if self.use_kernel and A is None:
-                attn_output = LinearKernel.apply(
-                    query_states.half(), 
-                    key_states.half(), 
-                    value_states.half(), 
-                    True, 
-                    (1/math.sqrt(key_states.shape[-1])), 
-                    False
-                )
-            # Kernel with A mask
-            elif self.use_kernel and A is not None:
-                attn_output = LinearKernelAMask.apply(
-                    query_states.half(), 
-                    key_states.half(), 
-                    value_states.half(), 
-                    A.mT.float().cumsum(-1),
-                    True, 
-                    (1/math.sqrt(key_states.shape[-1])), 
-                    False
-                )
-            # No kernel
-            else:
-                attn_output = torch.utils.checkpoint.checkpoint(
-                    forwrd_gated,
-                    query_states,
-                    key_states,
-                    value_states,
-                    self.attn_mask.clone(),
-                    A
-                )
-        elif self.power == "2":
-            A_cumsum = A.mT.float().cumsum(-1)
-            attn_output = _2Mamba2Furious_square.apply(query_states.half(), key_states.half(), value_states.half(), A_cumsum.float(), True, 1/math.sqrt(key_states.shape[-1]), False)
-        elif self.power == "exp":
-            A_cumsum = A.mT.float().cumsum(-1)
-            attn_output = _2Mamba2Furious_exp.apply(query_states.half(), key_states.half(), value_states.half(), A_cumsum.float(), True, 1/math.sqrt(key_states.shape[-1]), False)
+        # No kernel used
+        if not self.use_kernel:
+            attn_output = torch.utils.checkpoint.checkpoint(
+                forwrd_gated,
+                query_states,
+                key_states,
+                value_states,
+                self.attn_mask[:, :, :query_states.shape[2], :query_states.shape[2]].clone(),
+                A
+            )
+        # Kernel used
         else:
-            assert False
+            if self.power == "1":
+                # # Mamba kernel equivalence assuming use_sm_norm is set to False
+                # out_mamba = mamba_chunk_scan_combined(
+                #     (value_states / dt.mT[..., None]).transpose(1, 2),
+                #     dt,
+                #     -torch.exp(self.A_log),
+                #     key_states.transpose(1, 2) * (1/math.sqrt(key_states.shape[-1])),
+                #     query_states.transpose(1, 2),
+                #     chunk_size=32,
+                #     D=self.D if self.use_D_res else None,
+                #     z=self.z_gate_proj(hidden_states).view(hidden_shape) if self.use_z_out_gate else None,
+                # ).transpose(1, 2)
+                # attention_mask = ~torch.tril(torch.ones(query_states.shape[2], query_states.shape[2])).bool().repeat(query_states.shape[0], query_states.shape[1], 1, 1).to(query_states.device)
+                
+                # No normalization in the kernel
+                if self.norm_type == "output_norm":
+                    # Kernel, no A mask
+                    if A is None:
+                        attn_output = LinearKernel.apply(
+                            query_states.half(), 
+                            key_states.half(), 
+                            value_states.half(), 
+                            True, 
+                            (1/math.sqrt(key_states.shape[-1])), 
+                            False
+                        )
+                    # Kernel with A mask
+                    else:
+                        attn_output = LinearKernelAMask.apply(
+                            query_states.half(), 
+                            key_states.half(), 
+                            value_states.half(), 
+                            A.mT.float().cumsum(-1),
+                            True, 
+                            (1/math.sqrt(key_states.shape[-1])), 
+                            False
+                        )
+                # sm normalization in the kernel
+                elif self.norm_type == "sm_norm":
+                    assert False
+            elif self.power == "2":
+                # I only have kernels for A masks
+                if A is None:
+                    assert False
+                    
+                # No normalization in the kernel
+                if self.norm_type == "output_norm":
+                    attn_output = SquaredKernelAMask.apply(
+                        query_states.half(), 
+                        key_states.half(), 
+                        value_states.half(), 
+                        A.mT.float().cumsum(-1),
+                        True, 
+                        (1/math.sqrt(key_states.shape[-1])), 
+                        False
+                    )
+                # Online sm norm in the kernel
+                elif self.norm_type == "sm_norm":
+                    attn_output = _2Mamba2Furious_square.apply(
+                        query_states.half(), 
+                        key_states.half(), 
+                        value_states.half(), 
+                        A.mT.float().cumsum(-1),
+                        True, 
+                        1/math.sqrt(key_states.shape[-1]), 
+                        False
+                    )
+                else:
+                    assert False
+            elif self.power == "exp":
+                # No normalization in the kernel
+                if self.norm_type == "output_norm":
+                    assert False
+                # online sm norm in the kernel
+                elif self.norm_type == "sm_norm":
+                    if A is None:
+                        # exp with no A mask is just softmax
+                        assert False
+                    else:
+                        attn_output = _2Mamba2Furious_exp.apply(
+                            query_states.half(), 
+                            key_states.half(), 
+                            value_states.half(), 
+                            A.mT.float().cumsum(-1),
+                            True, 
+                            1/math.sqrt(key_states.shape[-1]), 
+                            False
+                        )
+                else:
+                    assert False
+            else:
+                assert False
         # attention_mask = ~torch.tril(torch.ones(query_states.shape[2], query_states.shape[2])).bool().repeat(query_states.shape[0], query_states.shape[1], 1, 1).to(query_states.device)
         # attn_output = forwrd_gated(query_states, key_states, value_states, attention_mask, A)
 
@@ -1285,7 +1465,7 @@ if __name__ == "__main__":
             "hidden_size": d,
             "initializer_range": 0.02,
             "intermediate_size": d*2,
-            "max_position_embeddings": L,
+            "max_position_embeddings": L*2,
             "model_type": "llama",
             "num_attention_heads": 24,
             "num_hidden_layers": 27,
@@ -1297,7 +1477,7 @@ if __name__ == "__main__":
             "torch_dtype": "float16",
             "use_cache": True,
             "vocab_size": 1024,
-            "attention_type": "linear__output_norm__in_conv_k_2__silu",
+            "attention_type": "squared__sm_norm__A_mask_type_neg_softplus__in_conv_k_2__dt_on_values",
         })
     layer = LlamaDecoderLayer(config=config, layer_idx=0).cuda()
     hidden_states = torch.randn(B, L, d).cuda()
@@ -1309,3 +1489,4 @@ if __name__ == "__main__":
         # attention_mask,
         # position_embeddings,
     )
+    # out.sum().backward()
