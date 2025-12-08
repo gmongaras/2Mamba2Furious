@@ -27,6 +27,7 @@ from kernel._2Mamba2Furious_square import _attention as _2Mamba2Furious_square
 from kernel._2Mamba2Furious_exp import _attention as _2Mamba2Furious_exp
 from kernel.LinearKernel import _attention as LinearKernel
 from kernel.LinearKernelAMask import _attention as LinearKernelAMask
+from kernel.LinearKernelSMNorm import _attention as LinearKernelSMNorm
 from kernel.SquaredKernelAMask import _attention as SquaredKernelAMask
 from Triton_Efficient_Kronecker_Product.kron import kron
 
@@ -348,9 +349,9 @@ configs = {
         "full_mamba": True
     },
     
-    # (3) Just normal linear attentio 
+    # (3) Just normal linear attention
     "linear": {
-        "use_kernel": False, 
+        "use_kernel": True, 
         "power": "1",
         "qk_activation_type": "relu",
         "use_in_conv": False,
@@ -743,7 +744,7 @@ configs = {
     # - in conv (window size of 2)
     # - dt on values (dt)
     "squared__sm_norm__A_mask_type_neg_softplus__in_conv_k_2__dt_on_values": {
-        "use_kernel": True,
+        "use_kernel": False,
         "power": "2",
         "qk_activation_type": "none",
         "use_in_conv": True,
@@ -1233,7 +1234,19 @@ class LlamaAttention(nn.Module):
 
             # Denominator
             if self.norm_type == "sm_norm":
-                attn_weights = attn_weights / attn_weights.sum(dim=-1, keepdim=True).clamp(min=1e-8)
+                denom = attn_weights.sum(dim=-1, keepdim=True)
+                assert torch.all(denom >= 0), "ayo wtf why are there negatives in the denom?"
+                
+                # Denominators that are zero will be turned into ones as the output
+                # No gradient but whatever. This should be rare enough it doesn't matter.
+                # Better than arbitrary clamping the denom which could cause large values if
+                # an outlier occurs.
+                attn_weights = torch.where(
+                    denom > 0,
+                    attn_weights / denom,
+                    # Trick since attn mask in binary
+                    (~attention_mask).float()
+                )
 
             # Denominator
             # attn_weights = attn_weights / (attn_weights.norm(p=2, dim=-1, keepdim=True) + 1e-8)
@@ -1294,7 +1307,19 @@ class LlamaAttention(nn.Module):
                         )
                 # sm normalization in the kernel
                 elif self.norm_type == "sm_norm":
-                    assert False
+                    # Kernel, no A mask
+                    if A is None:
+                        attn_output = LinearKernelSMNorm.apply(
+                            query_states.half(), 
+                            key_states.half(), 
+                            value_states.half(), 
+                            True, 
+                            (1/math.sqrt(key_states.shape[-1])), 
+                            False
+                        )
+                    # Kernel with A mask
+                    else:
+                        assert False
             elif self.power == "2":
                 # I only have kernels for A masks
                 if A is None:
@@ -1477,7 +1502,7 @@ if __name__ == "__main__":
             "torch_dtype": "float16",
             "use_cache": True,
             "vocab_size": 1024,
-            "attention_type": "squared__sm_norm__A_mask_type_neg_softplus__in_conv_k_2__dt_on_values",
+            "attention_type": "linear",
         })
     layer = LlamaDecoderLayer(config=config, layer_idx=0).cuda()
     hidden_states = torch.randn(B, L, d).cuda()

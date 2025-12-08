@@ -45,7 +45,7 @@ def test_grads(forward, backward_custom, *args, manual=False):
             
             adiff = torch.abs(args_[i].grad - args_custom[i].grad)
             rdiff_ = torch.abs(args_[i].grad / args_custom[i].grad)
-            rdiff = 1-torch.where(rdiff_ > 1, 1/rdiff_, rdiff_)
+            rdiff = 1-torch.where(rdiff_ > 1, 1/rdiff_, rdiff_).nan_to_num(1)
             max_adiff = adiff.max()
             max_rdiff = rdiff.max()
             assert torch.allclose(args_[i].grad, args_custom[i].grad)
@@ -90,10 +90,10 @@ def forward_lin_sm_norm(Q, K, V, M):
     return Y_N @ V
 def backward_lin_sm_norm(prev_grad, Q, K, V, M):
     Y = (Q @ K.mT * M)
-    Y_N = Y / Y.sum(-1, keepdims=True)
-    X = prev_grad @ V.mT
-    S = (X * Y_N).sum(-1, keepdims=True)
-    d_inner = (X - S) / Y.sum(-1, keepdims=True)
+    denom = Y.sum(-1, keepdims=True)
+    Y_N = Y / denom
+    G = (prev_grad @ V.mT) * M
+    d_inner = (G - ((Y_N * G).sum(-1, keepdims=True))) / denom
     dq = (d_inner * M) @ K
     dk = (d_inner * M).mT @ Q
     dv = Y_N.mT @ prev_grad
@@ -101,7 +101,7 @@ def backward_lin_sm_norm(prev_grad, Q, K, V, M):
 # test_grads(
 #     forward_lin_sm_norm,
 #     backward_lin_sm_norm,
-#     Q, K, V, mask, manual=True
+#     Q.abs(), K.abs(), V.abs(), mask, manual=True
 # )
     
 
@@ -158,11 +158,11 @@ def backward_square_Amask(prev_grad, Q, K, V, A, M):
     da_m = -(QK2 * GVAM).sum(-2)
     da = da_n + da_m
     return dq, dk, dv, da, None
-test_grads(
-    forward_square_Amask,
-    backward_square_Amask,
-    Q, K, V, A, mask, manual=True
-)
+# test_grads(
+#     forward_square_Amask,
+#     backward_square_Amask,
+#     Q, K, V, A, mask, manual=True
+# )
 
 
 print()
