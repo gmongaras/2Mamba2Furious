@@ -256,7 +256,7 @@ def _attn_fwd(sm_scale, M, #
     # m_i during the loop is the max value across rows.
     # Here, the log2 of the sum of the row (denominator) is
     # added. This way when we do 2^{... - m_i}, we are doing two things.
-    # This first is subtracting the min for stability. The second is
+    # This first is subtracting the max for stability. The second is
     # 2^{-log2(li)} = 1/l_i effectively does the denominator.
     # m_i += tl.math.log2(l_i)
     m_i = tl.math.log2(l_i * tl.exp2(m_i))
@@ -313,11 +313,10 @@ def _attn_bwd_preprocess_inner(acc, do, q, A_q, m, #
         
         # Subtractax from A mask and calculate exponentate the A mask
         # This also applies the denominator
-        A_mask_m = A_mask
-        A_mask_m = tl.where(A_mask_m < -1024, 0.0, tl.exp2(A_mask_m)) # Mask where pre exp was less than -1024 to zero
+        A_mask = tl.where(A_mask < -1024, 0.0, tl.exp2(A_mask)) # Mask where pre exp was less than -1024 to zero
         
         # Compute qkA
-        p = qk * qk * A_mask_m
+        p = qk * qk * A_mask
             
         # Compute dp = do vT
         vT = desc_v.load([offsetv_y, 0]).T.to(tl.float32)
@@ -1006,7 +1005,7 @@ if __name__ == "__main__":
     #     provider="triton-fp16",
     # )
     
-    #"""
+    """
     b_idx = 0
     q = torch.load("debug_output/query_states").cuda().half().detach().requires_grad_()
     seq_len = (~(q[b_idx,0,:,0] == q[b_idx,0,-1,0])).sum()
@@ -1017,6 +1016,7 @@ if __name__ == "__main__":
     A_cumsum = torch.load("debug_output/A_cumsum").cuda().half()[b_idx:b_idx+1,:,:seq_len].contiguous().detach().requires_grad_()
     out = attention(q, k, v, A_cumsum, True, 0.125, False)
     out.sum().backward()
+    """
     """
     test_op(
         q.shape[0],

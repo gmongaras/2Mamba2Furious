@@ -425,7 +425,7 @@ def _attn_bwd_preprocess_(sm_scale, S, #
     
     # Store output
     s_ptrs = S + off_hz * N_CTX + offs_m
-    tl.store(s_ptrs, acc)
+    tl.store(s_ptrs, acc.to(tl.float32))
     
     
     
@@ -955,11 +955,11 @@ def test_op(Z, H, N_CTX, HEAD_DIM, causal, warp_specialize, mode, provider, dtyp
         k = k.float().detach().requires_grad_()
     if v is None:
         v = ((torch.empty((Z, H, N_CTX, HEAD_DIM), dtype=dtype, device=DEVICE).normal_(mean=0.0, std=0.5)).float().requires_grad_())
-        v_ = (torch.empty((Z, H, N_CTX, HEAD_DIM), dtype=dtype, device=DEVICE).normal_(mean=0.0, std=0.5)) * 20
-        v = (v * torch.nn.functional.softplus(v_)).detach().float().requires_grad_()
+        # v_ = (torch.empty((Z, H, N_CTX, HEAD_DIM), dtype=dtype, device=DEVICE).normal_(mean=0.0, std=0.5)) * 20
+        # v = (v * torch.nn.functional.softplus(v_)).detach().float().requires_grad_()
     else:
         v = v.float().detach().requires_grad_()
-    sm_scale = 0.5
+    sm_scale = 1/(HEAD_DIM)**0.5
     # reference implementation
     ref_dtype = dtype
     if mode == "fwd" and "fp8" in provider:
