@@ -223,7 +223,7 @@ def _attn_fwd(sm_scale, M, #
     offs_n = tl.arange(0, BLOCK_N)
     # initialize pointer to m and l
     m_i = tl.zeros([BLOCK_M], dtype=tl.float32) - float("inf")
-    l_i = tl.zeros([BLOCK_M], dtype=tl.float32) + 1.0
+    l_i = tl.zeros([BLOCK_M], dtype=tl.float32)
     acc = tl.zeros([BLOCK_M, HEAD_DIM], dtype=tl.float32)
     # load scales
     qk_scale = sm_scale
@@ -258,8 +258,8 @@ def _attn_fwd(sm_scale, M, #
     # added. This way when we do 2^{... - m_i}, we are doing two things.
     # This first is subtracting the max for stability. The second is
     # 2^{-log2(li)} = 1/l_i effectively does the denominator.
-    # m_i += tl.math.log2(l_i)
-    m_i = tl.math.log2(l_i * tl.exp2(m_i))
+    m_i += tl.math.log2(l_i)
+    # m_i = tl.math.log2(l_i * tl.exp2(m_i))
     
     # Divide by the denominator
     acc = acc / l_i[:, None]
@@ -304,7 +304,7 @@ def _attn_bwd_preprocess_inner(acc, do, q, A_q, m, #
         
         # Compute A mask
         A_k = desc_A_k.load([offsetk_y]).to(tl.float32)
-        A_mask = A_q[:, None] - A_k[None, :]
+        A_mask = A_q[:, None] - A_k[None, :] - m[:, None]
         
         # Inner product on q and k
         qk = qk * qk_scale
@@ -420,7 +420,7 @@ def _attn_bwd_preprocess_(sm_scale, S, #
     # epilogue
     
     # Divide the accumulation tensor by the denominator
-    acc = acc * tl.exp2(-m)
+    # acc = acc * tl.exp2(-m)
     
     # Store output
     s_ptrs = S + off_hz * N_CTX + offs_m
@@ -645,15 +645,15 @@ def _attn_bwd(Q, K, V, A, sm_scale,  #
 
     dk, dv, da_k = _attn_bwd_dkdv(
         dk, dv, da_k, #
-                            Q, k, v, A, Ak, sm_scale,  #
-                            DO,  #
-                            M, S, #
-                            stride_tok, stride_d,  #
-                            H, N_CTX,  #
-                            MASK_BLOCK_M1, BLOCK_N1, HEAD_DIM,  #
-                            start_n, start_m, num_steps,  #
-                            MASK=True  #
-                            )
+        Q, k, v, A, Ak, sm_scale,  #
+        DO,  #
+        M, S, #
+        stride_tok, stride_d,  #
+        H, N_CTX,  #
+        MASK_BLOCK_M1, BLOCK_N1, HEAD_DIM,  #
+        start_n, start_m, num_steps,  #
+        MASK=True  #
+    )
 
     start_m += num_steps * MASK_BLOCK_M1
     num_steps = (N_CTX - start_m) // BLOCK_M1
@@ -708,24 +708,24 @@ def _attn_bwd(Q, K, V, A, sm_scale,  #
     # structure for dK & dV above as much as possible.
     num_steps = BLOCK_M2 // MASK_BLOCK_N2
     dq, da_q = _attn_bwd_dqda(dq, da_q, q, K, V, A, Aq,  #
-                      do, m, s, #
-                      stride_tok, stride_d,  #
-                      H, N_CTX,   #
-                      BLOCK_M2, MASK_BLOCK_N2, HEAD_DIM,  #
-                      start_m, end_n - num_steps * MASK_BLOCK_N2, num_steps,  #
-                      MASK=True  #
-                      )
+        do, m, s, #
+        stride_tok, stride_d,  #
+        H, N_CTX,   #
+        BLOCK_M2, MASK_BLOCK_N2, HEAD_DIM,  #
+        start_m, end_n - num_steps * MASK_BLOCK_N2, num_steps,  #
+        MASK=True  #
+    )
     end_n -= num_steps * MASK_BLOCK_N2
     # stage 2
     num_steps = end_n // BLOCK_N2
     dq, da_q = _attn_bwd_dqda(dq, da_q, q, K, V, A, Aq,  #
-                      do, m, s, #
-                      stride_tok, stride_d,  #
-                      H, N_CTX,  #
-                      BLOCK_M2, BLOCK_N2, HEAD_DIM,  #
-                      start_m, end_n - num_steps * BLOCK_N2, num_steps,  #
-                      MASK=False  #
-                      )
+        do, m, s, #
+        stride_tok, stride_d,  #
+        H, N_CTX,  #
+        BLOCK_M2, BLOCK_N2, HEAD_DIM,  #
+        start_m, end_n - num_steps * BLOCK_N2, num_steps,  #
+        MASK=False  #
+    )
     # Write back dQ.
     dq_ptrs = DQ + offs_m[:, None] * stride_tok + offs_k[None, :] * stride_d
     # dq *= LN2

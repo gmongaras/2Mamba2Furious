@@ -744,7 +744,7 @@ configs = {
     # - in conv (window size of 2)
     # - dt on values (dt)
     "squared__sm_norm__A_mask_type_neg_softplus__in_conv_k_2__dt_on_values": {
-        "use_kernel": False,
+        "use_kernel": True,
         "power": "2",
         "qk_activation_type": "none",
         "use_in_conv": True,

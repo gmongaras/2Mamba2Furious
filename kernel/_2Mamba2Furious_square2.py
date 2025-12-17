@@ -222,7 +222,7 @@ def _attn_fwd(sm_scale, M, #
     offs_n = tl.arange(0, BLOCK_N)
     # initialize pointer to m and l
     m_i = tl.zeros([BLOCK_M], dtype=tl.float32) - float("inf")
-    l_i = tl.zeros([BLOCK_M], dtype=tl.float32) + 1.0
+    l_i = tl.zeros([BLOCK_M], dtype=tl.float32)
     acc = tl.zeros([BLOCK_M, HEAD_DIM], dtype=tl.float32)
     # load scales
     qk_scale = sm_scale
@@ -1064,7 +1064,7 @@ def test_op(Z, H, N_CTX, HEAD_DIM, causal, warp_specialize, mode, provider, dtyp
     tri_dq, q.grad = q.grad.clone(), None
     tri_da, A_cumsum.grad = A_cumsum.grad.clone(), None
     # compare
-    # torch.testing.assert_close(tri_out.float(), ref_out.float(), atol=1e-2, rtol=0)
+    torch.testing.assert_close(tri_out.float(), ref_out.float(), atol=1e-2, rtol=0)
     rtol = 0.0
     # Relative tolerance workaround for known hardware limitation of CDNA2 GPU.
     # For details see https://pytorch.org/docs/stable/notes/numerical_accuracy.html#reduced-precision-fp16-and-bf16-gemms-and-convolutions-on-amd-instinct-mi200-devices
