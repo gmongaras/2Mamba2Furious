@@ -10,6 +10,27 @@ import safetensors
 from Triton_Efficient_Kronecker_Product.kron import kron
 from GPT_Trainer.Trainer import get_model
 
+# import random
+# import numpy as np
+# def set_seed(seed_value=42):
+#     """Set seeds for reproducibility."""
+#     # 1. Set seed for Python's built-in random module
+#     random.seed(seed_value)
+#     # Set seed for hash to ensure consistent environment
+#     os.environ['PYTHONHASHSEED'] = str(seed_value)
+#     # 2. Set seed for NumPy
+#     np.random.seed(seed_value)
+#     # 3. Set seed for PyTorch (both CPU and GPU)
+#     torch.manual_seed(seed_value)
+#     if torch.cuda.is_available():
+#         torch.cuda.manual_seed(seed_value)
+#         torch.cuda.manual_seed_all(seed_value) # For multi-GPU setups
+#     # 4. Configure PyTorch to use deterministic algorithms
+#     torch.backends.cudnn.deterministic = True
+#     torch.backends.cudnn.benchmark = False # Disabling benchmarking helps ensure determinism
+#     # Note: torch.use_deterministic_algorithms(True) can also be used in newer versions
+# set_seed(1234) # You can use any integer seed value
+
 
 try:
     from GPT_Trainer.multi_gpu_helpers import is_main_process
