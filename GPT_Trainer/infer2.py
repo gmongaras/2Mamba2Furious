@@ -8,14 +8,15 @@ from tqdm import tqdm
 from contextlib import nullcontext
 import safetensors
 from Triton_Efficient_Kronecker_Product.kron import kron
+from GPT_Trainer.Trainer import get_model
 
 
 try:
     from GPT_Trainer.multi_gpu_helpers import is_main_process
-    from GPT_Trainer.LlamaDecoderLayer8 import LlamaDecoderLayer
+    from GPT_Trainer.LlamaDecoderLayerClean import LlamaDecoderLayer
 except ModuleNotFoundError:
     from multi_gpu_helpers import is_main_process
-    from LlamaDecoderLayer8 import LlamaDecoderLayer
+    from LlamaDecoderLayerClean import LlamaDecoderLayer
 
 
 
@@ -27,9 +28,9 @@ def infer():
     attention_type = "softmax"
     size = "medium"
     # model_path = "models/Ker_4096L_2P_NoPE_Conv_AMask_AMaskTypeNEGSOFTPLUS_NOAMaskBias_AMaskValueDiscretizationDT_SMNorm/"
-    model_path = "models/Ker_8192L_Medium_2P_NoPE_Conv_AMask_AMaskTypeNEGSOFTPLUS_NOAMaskBias_AMaskValueDiscretizationNone_SMNorm"
+    model_path = "models/medium_8192sl_gpu_64bs__squared__sm_norm__A_mask_type_neg_softplus__in_conv_k_2_"
     device = "cuda:0"
-    model_max_length = 4096*2
+    model_max_length = 8192
     use_efficient = True
 
 
@@ -50,60 +51,12 @@ def infer():
     # Set max sequence length
     tokenizer.model_max_length = model_max_length
 
-    # GPT-J Model. We are training it from 
-    if size == "medium":
-        model = transformers.LlamaForCausalLM(config=transformers.LlamaConfig.from_dict({
-            "_name_or_path": "meta-llama/Llama-2-7b-hf",
-            "architectures": [
-                "LlamaForCausalLM"
-            ],
-            "bos_token_id": 1,
-            "eos_token_id": 2,
-            "hidden_act": "silu",
-            "hidden_size": 1024+512,
-            "initializer_range": 0.02,
-            "intermediate_size": 1024*3,
-            "max_position_embeddings": model_max_length,
-            "model_type": "llama",
-            "num_attention_heads": 24,
-            "num_hidden_layers": 27,
-            "num_key_value_heads": 24,
-            "pretraining_tp": 1,
-            "rms_norm_eps": 1e-05,
-            "rope_scaling": None,
-            "tie_word_embeddings": False,
-            "torch_dtype": "float16",
-            "use_cache": True,
-            "vocab_size": tokenizer.vocab_size,
-            "attention_type": attention_type,
-        }))
-    else:
-        model = transformers.LlamaForCausalLM(config=transformers.LlamaConfig.from_dict({
-            "_name_or_path": "meta-llama/Llama-2-7b-hf",
-            "architectures": [
-                "LlamaForCausalLM"
-            ],
-            "bos_token_id": 1,
-            "eos_token_id": 2,
-            "hidden_act": "silu",
-            "hidden_size": 1024, #4096,
-            "initializer_range": 0.02,
-            "intermediate_size": 1024*2, # 11008
-            "max_position_embeddings": model_max_length,
-            "model_type": "llama",
-            "num_attention_heads": 16,
-            "num_hidden_layers": 20,
-            "num_key_value_heads": 16,
-            "pretraining_tp": 1,
-            "rms_norm_eps": 1e-05,
-            "rope_scaling": None,
-            "tie_word_embeddings": False,
-            "torch_dtype": "float16",
-            "use_cache": True,
-            # "vocab_size": 32000,
-            "vocab_size": tokenizer.vocab_size,
-            "attention_type": attention_type,
-        }))
+    # Load the config
+    config = torch.load(os.path.join(model_path, "config.pt"))
+
+    # Set model
+    model = get_model(config["model_size"], config["model_max_length"], tokenizer.vocab_size, config["attention_type"])
+    # model = transformers.LlamaForCausalLM(config=transformers.LlamaConfig.from_dict(config)).cuda()
 
     
     # Replace all self attention layers with the cosine attention layer

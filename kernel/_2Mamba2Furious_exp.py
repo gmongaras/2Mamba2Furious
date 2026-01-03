@@ -8,6 +8,10 @@ from triton.tools.tensor_descriptor import TensorDescriptor
 
 DEVICE = triton.runtime.driver.active.get_active_torch_device()
 
+if __name__ == "__main__":
+    DEBUG=True
+else:
+    DEBUG=False
 
 def is_hip():
     return triton.runtime.driver.active.get_current_target().backend == "hip"
@@ -29,7 +33,7 @@ def is_hopper():
     return is_cuda() and torch.cuda.get_device_capability()[0] == 9
 
 
-@triton.jit
+@triton.jit(debug=DEBUG)
 def _attn_fwd_inner(acc, l_i, m_i, q, A_q,  #
                     desc_k, desc_v, desc_A_k, #
                     qo_offset_y, offset_y, dtype: tl.constexpr, start_m, qk_scale,  #
@@ -54,17 +58,17 @@ def _attn_fwd_inner(acc, l_i, m_i, q, A_q,  #
     for start_n in tl.range(lo, hi, BLOCK_N, warp_specialize=warp_specialize):
         start_n = tl.multiple_of(start_n, BLOCK_N)
         # -- compute qk ----
-        k = desc_k.load([offsetk_y, 0]).T
+        k = desc_k.load([offsetk_y, 0]).T.to(tl.float32)
         qk = tl.dot(q, k)
         
         # Add A mask
-        A_k = desc_A_k.load([offsetk_y])
+        A_k = desc_A_k.load([offsetk_y]).to(tl.float32)
         A = (A_q[:, None] - A_k[None, :])
         ## For some reason this produces NaNs with exp2
         ## I think it's because the positive part (when i > j) above the diag
         ## gets really large, producing infs. Then multiplying by inf gives nan
         # p = p * tl.math.exp(A.to(tl.float32)) 
-        qk = qk.to(tl.float32) + A.to(tl.float32)
+        qk = qk + A
         
         # Masking diag and off diag
         if STAGE == 2:
@@ -75,7 +79,8 @@ def _attn_fwd_inner(acc, l_i, m_i, q, A_q,  #
         else:
             m_ij = tl.maximum(m_i, tl.max(qk, 1) * qk_scale)
             qk = qk * qk_scale - m_ij[:, None]
-        p = tl.math.exp2(qk).to(tl.float32)
+        p = tl.where(qk < -1024, 0.0, tl.exp2(qk)) # Mask where pre exp was less than -1024 to zero
+        # p = tl.math.exp2(qk)
         
         # # Multiply by A mask
         # A_k = desc_A_k.load([offsetk_y])
@@ -91,21 +96,11 @@ def _attn_fwd_inner(acc, l_i, m_i, q, A_q,  #
         alpha = tl.math.exp2(m_i - m_ij)
         l_ij = tl.sum(p, 1)
         # -- update output accumulator --
-        if not IS_HOPPER and warp_specialize and BLOCK_M == 128 and HEAD_DIM == 128:
-            BM: tl.constexpr = acc.shape[0]
-            BN: tl.constexpr = acc.shape[1]
-            acc0, acc1 = acc.reshape([BM, 2, BN // 2]).permute(0, 2, 1).split()
-            acc0 = acc0 * alpha[:, None]
-            acc1 = acc1 * alpha[:, None]
-            acc = tl.join(acc0, acc1).permute(0, 2, 1).reshape([BM, BN])
-        else:
-            acc = acc * alpha[:, None]
+        acc = acc * alpha[:, None]
+        
         # prepare p and v for the dot
-        if dtype == tl.float8e5:
-            v = desc_v.load([0, offsetv_y]).T
-        else:
-            v = desc_v.load([offsetv_y, 0])
-        p = p.to(dtype)
+        v = desc_v.load([offsetv_y, 0])
+        
         # note that this non transposed v for FP8 is only supported on Blackwell
         acc = tl.dot(p, v, acc)
         # update m_i and l_i
@@ -167,7 +162,7 @@ def prune_invalid_configs(configs, named_args, **kwargs):
     return [conf for conf in configs if conf.kwargs.get("BLOCK_M", 0) <= N_CTX]
 
 
-@triton.jit
+@triton.jit(debug=DEBUG)
 def _maybe_make_tensor_desc(desc_or_ptr, shape, strides, block_shape):
     if isinstance(desc_or_ptr, tl.tensor_descriptor):
         return desc_or_ptr
@@ -177,7 +172,7 @@ def _maybe_make_tensor_desc(desc_or_ptr, shape, strides, block_shape):
 
 @triton.autotune(configs=list(filter(keep, configs)), key=["N_CTX", "HEAD_DIM", "FP8_OUTPUT", "warp_specialize"],
                  prune_configs_by={'early_config_prune': prune_invalid_configs})
-@triton.jit
+@triton.jit(debug=DEBUG)
 def _attn_fwd(sm_scale, M,  #
               Z, H, desc_q, desc_k, desc_v, desc_o, desc_A, N_CTX,  #
               HEAD_DIM: tl.constexpr,  #
@@ -227,9 +222,9 @@ def _attn_fwd(sm_scale, M,  #
     qk_scale *= 1.44269504  # 1/ln(2)
     # Note that this converts a base 2 exp via: e^A = 2^(A*log_2(e)) = 2^(A*(1/ln(2)))
     # load q: it will stay in SRAM throughout
-    q = desc_q.load([qo_offset_y, 0])
+    q = desc_q.load([qo_offset_y, 0]).to(tl.float32)
     # Load A_Q
-    A_q = desc_A_q.load([qo_offset_y])
+    A_q = desc_A_q.load([qo_offset_y]).to(tl.float32)
     # stage 1: off-band
     # For causal = True, STAGE = 3 and _attn_fwd_inner gets 1 as its STAGE
     # For causal = False, STAGE = 1, and _attn_fwd_inner gets 3 as its STAGE
@@ -256,7 +251,7 @@ def _attn_fwd(sm_scale, M,  #
     desc_o.store([qo_offset_y, 0], acc.to(tl.float32))
 
 
-@triton.jit
+@triton.jit(debug=DEBUG)
 def _attn_bwd_preprocess(O, DO,  #
                          Delta,  #
                          Z, H, N_CTX,  #
@@ -266,7 +261,7 @@ def _attn_bwd_preprocess(O, DO,  #
     off_hz = tl.program_id(1)
     off_n = tl.arange(0, HEAD_DIM)
     # load
-    o = tl.load(O + off_hz * HEAD_DIM * N_CTX + off_m[:, None] * HEAD_DIM + off_n[None, :])
+    o = tl.load(O + off_hz * HEAD_DIM * N_CTX + off_m[:, None] * HEAD_DIM + off_n[None, :]).to(tl.float32)
     do = tl.load(DO + off_hz * HEAD_DIM * N_CTX + off_m[:, None] * HEAD_DIM + off_n[None, :]).to(tl.float32)
     delta = tl.sum(o * do, axis=1)
     # write-back
@@ -274,7 +269,7 @@ def _attn_bwd_preprocess(O, DO,  #
 
 
 # The main inner-loop logic for computing dK and dV.
-@triton.jit
+@triton.jit(debug=DEBUG)
 def _attn_bwd_dkdv(dk, dv, da_k,  #
                    Q, k, v, A, Ak, sm_scale,  #
                    DO,  #
@@ -297,36 +292,36 @@ def _attn_bwd_dkdv(dk, dv, da_k,  #
     curr_m = start_m
     step_m = BLOCK_M1
     for blk_idx in range(num_steps):
-        qT = tl.load(qT_ptrs)
+        qT = tl.load(qT_ptrs).to(tl.float32)
         # Load m before computing qk to reduce pipeline stall.
         offs_m = curr_m + tl.arange(0, BLOCK_M1)
-        m = tl.load(M + offs_m)
+        m = tl.load(M + offs_m).to(tl.float32)[None, :]
+        Di = tl.load(D + offs_m).to(tl.float32)[None, :]
+        
+        # Compute attn scores
         qkT = tl.dot(k, qT)
         
-        # Add the A mask
-        Aq = tl.load(A + offs_m)
-        A_maskT = Aq.to(tl.float32)[None, :] - Ak.to(tl.float32)[:, None]
-        qkT = qkT + A_maskT
+        # Add the A mask and subtract the max
+        Aq = tl.load(A + offs_m).to(tl.float32)
+        A_maskT = Aq[None, :] - Ak[:, None]
+        qkT = qkT + A_maskT - m
         
-        # Subtract the min and exponentiate
-        pT = tl.math.exp2(qkT - m[None, :])
+        # Exponentiate
+        pT = tl.where(qkT < -1024, 0.0, tl.exp2(qkT)) # Mask where pre exp was less than -1024 to zero
+        # pT = tl.math.exp2(qkT)
         
         # Autoregressive masking.
         if MASK:
             mask = (offs_m[None, :] >= offs_n[:, None])
             pT = tl.where(mask, pT, 0.0)
             
-        do = tl.load(do_ptrs)
         # Compute dV.
-        ppT = pT
-        ppT = ppT.to(tl.float16)
-        dv += tl.dot(ppT, do)
-        # D (= delta) is pre-divided by ds_scale.
-        Di = tl.load(D + offs_m)
+        do = tl.load(do_ptrs).to(tl.float32)
+        dv += tl.dot(pT, do)
+        
         # Compute dP and dS.
-        dpT = tl.dot(v, tl.trans(do)).to(tl.float32)
-        dsT = pT * (dpT - Di[None, :])
-        dsT = dsT.to(tl.float16)
+        dpT = tl.dot(v, tl.trans(do))
+        dsT = pT * (dpT - Di)
         dk += tl.dot(dsT, tl.trans(qT))
         
         # Add to dk
@@ -341,9 +336,9 @@ def _attn_bwd_dkdv(dk, dv, da_k,  #
 
 
 # the main inner-loop logic for computing dQ
-@triton.jit
+@triton.jit(debug=DEBUG)
 def _attn_bwd_dqda(dq, da_q, q, K, V, A, Aq,  #
-                 do, m, D,
+                 do, m, Di,
                  # shared by Q/K/V/DO.
                  stride_tok, stride_d,  #
                  H, N_CTX,  #
@@ -358,46 +353,39 @@ def _attn_bwd_dqda(dq, da_q, q, K, V, A, Aq,  #
     offs_k = tl.arange(0, HEAD_DIM)
     kT_ptrs = K + offs_n[None, :] * stride_tok + offs_k[:, None] * stride_d
     vT_ptrs = V + offs_n[None, :] * stride_tok + offs_k[:, None] * stride_d
-    # D (= delta) is pre-divided by ds_scale.
-    Di = tl.load(D + offs_m)
     # BLOCK_M2 must be a multiple of BLOCK_N2, otherwise the code wouldn't work.
     tl.static_assert(BLOCK_M2 % BLOCK_N2 == 0)
     curr_n = start_n
     step_n = BLOCK_N2
     for blk_idx in range(num_steps):
         # Inner product
-        kT = tl.load(kT_ptrs)
-        vT = tl.load(vT_ptrs)
+        kT = tl.load(kT_ptrs).to(tl.float32)
+        vT = tl.load(vT_ptrs).to(tl.float32)
         qk = tl.dot(q, kT)
         
-        # Create A mask and add it to qk
+        # Create A mask and add it to qk as well as the max
         offs_n = curr_n + tl.arange(0, BLOCK_N2)
-        Ak = tl.load(A + offs_n)
-        A_mask = Aq.to(tl.float32)[:, None] - Ak.to(tl.float32)[None, :]
-        qk = qk + A_mask
+        Ak = tl.load(A + offs_n).to(tl.float32)
+        qk = qk + Aq[:, None] - Ak[None, :] - m
         
         # Exponentiate
-        p = tl.math.exp2(qk - m)
+        p = tl.where(qk < -1024, 0.0, tl.exp2(qk)) # Mask where pre exp was less than -1024 to zero
+        # p = tl.math.exp2(qk)
         
         # Autoregressive masking.
         if MASK:
             mask = (offs_m[:, None] >= offs_n[None, :])
             p = tl.where(mask, p, 0.0)
             
-        # Multiply by A mask
-        # p = p * A_mask
-            
         # Compute dP and dS.
-        dp = tl.dot(do, vT).to(tl.float32)
+        dp = tl.dot(do, vT)
         ds = p * (dp - Di[:, None])
-        ds = ds.to(tl.float16)
         
         # Compute dQ.
         # NOTE: We need to de-scale dq in the end, because kT was pre-scaled.
-        dq += tl.dot(ds, tl.trans(kT))
+        dq = tl.dot(ds, tl.trans(kT), dq)
         
         # Compute dA.
-        # da_ = ds * A_mask
         da_q += tl.sum(ds, axis=1)
         
         # Increment pointers.
@@ -407,7 +395,7 @@ def _attn_bwd_dqda(dq, da_q, q, K, V, A, Aq,  #
     return dq, da_q
 
 
-@triton.jit
+@triton.jit(debug=DEBUG)
 def _attn_bwd(Q, K, V, A, sm_scale,  #
               DO,  #
               DQ, DK, DV, DA_Q, DA_K,  #
@@ -458,24 +446,24 @@ def _attn_bwd(Q, K, V, A, sm_scale,  #
     da_k = tl.zeros([BLOCK_N1], dtype=tl.float32)
 
     # load K and V: they stay in SRAM throughout the inner loop.
-    k = tl.load(K + offs_n[:, None] * stride_tok + offs_k[None, :] * stride_d)
-    v = tl.load(V + offs_n[:, None] * stride_tok + offs_k[None, :] * stride_d)
+    k = tl.load(K + offs_n[:, None] * stride_tok + offs_k[None, :] * stride_d).to(tl.float32)
+    v = tl.load(V + offs_n[:, None] * stride_tok + offs_k[None, :] * stride_d).to(tl.float32)
     
     # Load in Ak. It will stay in SRAM throughout the inner loop
-    Ak = tl.load(A + offs_n)
+    Ak = tl.load(A + offs_n).to(tl.float32)
 
     num_steps = BLOCK_N1 // MASK_BLOCK_M1
 
     dk, dv, da_k = _attn_bwd_dkdv(dk, dv, da_k, #
-                            Q, k, v, A, Ak, sm_scale,  #
-                            DO,  #
-                            M, D,  #
-                            stride_tok, stride_d,  #
-                            H, N_CTX,  #
-                            MASK_BLOCK_M1, BLOCK_N1, HEAD_DIM,  #
-                            start_n, start_m, num_steps,  #
-                            MASK=True  #
-                            )
+        Q, k, v, A, Ak, sm_scale,  #
+        DO,  #
+        M, D,  #
+        stride_tok, stride_d,  #
+        H, N_CTX,  #
+        MASK_BLOCK_M1, BLOCK_N1, HEAD_DIM,  #
+        start_n, start_m, num_steps,  #
+        MASK=True  #
+    )
 
     start_m += num_steps * MASK_BLOCK_M1
     num_steps = (N_CTX - start_m) // BLOCK_M1
@@ -508,16 +496,19 @@ def _attn_bwd(Q, K, V, A, sm_scale,  #
     MASK_BLOCK_N2: tl.constexpr = BLOCK_N2 // BLK_SLICE_FACTOR
     offs_m = start_m + tl.arange(0, BLOCK_M2)
 
-    q = tl.load(Q + offs_m[:, None] * stride_tok + offs_k[None, :] * stride_d)
+    q = tl.load(Q + offs_m[:, None] * stride_tok + offs_k[None, :] * stride_d).to(tl.float32)
     dq = tl.zeros([BLOCK_M2, HEAD_DIM], dtype=tl.float32)
     da_q = tl.zeros([BLOCK_M2], dtype=tl.float32)
-    do = tl.load(DO + offs_m[:, None] * stride_tok + offs_k[None, :] * stride_d)
+    do = tl.load(DO + offs_m[:, None] * stride_tok + offs_k[None, :] * stride_d).to(tl.float32)
 
-    m = tl.load(M + offs_m)
+    m = tl.load(M + offs_m).to(tl.float32)
     m = m[:, None]
     
+    # D (= delta) is pre-divided by ds_scale.
+    Di = tl.load(D + offs_m).to(tl.float32)
+    
     # Load the Q part of the A mask which stays in memory
-    Aq = tl.load(A + offs_m)
+    Aq = tl.load(A + offs_m).to(tl.float32)
 
     # Compute dQ for masked (diagonal) blocks.
     # NOTE: This code scans each row of QK^T backward (from right to left,
@@ -526,31 +517,30 @@ def _attn_bwd(Q, K, V, A, sm_scale,  #
     # structure for dK & dV above as much as possible.
     num_steps = BLOCK_M2 // MASK_BLOCK_N2
     dq, da_q = _attn_bwd_dqda(dq, da_q, q, K, V, A, Aq,  #
-                      do, m, D,  #
-                      stride_tok, stride_d,  #
-                      H, N_CTX,  #
-                      BLOCK_M2, MASK_BLOCK_N2, HEAD_DIM,  #
-                      start_m, end_n - num_steps * MASK_BLOCK_N2, num_steps,  #
-                      MASK=True  #
-                      )
+        do, m, Di,  #
+        stride_tok, stride_d,  #
+        H, N_CTX,  #
+        BLOCK_M2, MASK_BLOCK_N2, HEAD_DIM,  #
+        start_m, end_n - num_steps * MASK_BLOCK_N2, num_steps,  #
+        MASK=True  #
+    )
     end_n -= num_steps * MASK_BLOCK_N2
     # stage 2
     num_steps = end_n // BLOCK_N2
     dq, da_q = _attn_bwd_dqda(dq, da_q, q, K, V, A, Aq,  #
-                      do, m, D,  #
-                      stride_tok, stride_d,  #
-                      H, N_CTX,  #
-                      BLOCK_M2, BLOCK_N2, HEAD_DIM,  #
-                      start_m, end_n - num_steps * BLOCK_N2, num_steps,  #
-                      MASK=False  #
-                      )
+        do, m, Di,  #
+        stride_tok, stride_d,  #
+        H, N_CTX,  #
+        BLOCK_M2, BLOCK_N2, HEAD_DIM,  #
+        start_m, end_n - num_steps * BLOCK_N2, num_steps,  #
+        MASK=False  #
+    )
     # Write back dQ.
     dq_ptrs = DQ + offs_m[:, None] * stride_tok + offs_k[None, :] * stride_d
     dq *= LN2
     tl.store(dq_ptrs, dq)
     
     # Di is divided by the sm_scale. We need to undo that
-    da_k *= 1
     da_q *= LN2
     
     # Write back da
@@ -564,10 +554,10 @@ class _attention(torch.autograd.Function):
 
     @staticmethod
     def forward(ctx, q, k, v, A_cumsum, causal, sm_scale, warp_specialize=True):
-        q = q.contiguous()
-        k = k.contiguous()
-        v = v.contiguous()
-        A_cumsum = A_cumsum.contiguous()
+        q = q.float().contiguous()
+        k = k.float().contiguous()
+        v = v.float().contiguous()
+        A_cumsum = A_cumsum.float().contiguous()
         
         # Divide the A mask by the sm_scale. It will be multiplied later and we
         # don't want this to have any effect on the A .
@@ -642,6 +632,7 @@ class _attention(torch.autograd.Function):
         ctx.sm_scale = sm_scale
         ctx.HEAD_DIM = HEAD_DIM_K
         ctx.causal = causal
+        ctx.warp_specialize = warp_specialize
         return o
 
     @staticmethod
@@ -652,6 +643,7 @@ class _attention(torch.autograd.Function):
         k = k.contiguous()
         v = v.contiguous()
         o = o.contiguous()
+        A_cumsum = A_cumsum.contiguous()
         # assert do.is_contiguous()
         # assert q.stride() == k.stride() == v.stride() == o.stride() == do.stride()
         dq = torch.empty_like(q)
@@ -667,12 +659,10 @@ class _attention(torch.autograd.Function):
         RCP_LN2 = 1.4426950408889634  # = 1.0 / ln(2)
         
         # Merge the softmax scale into k
-        arg_k = k
-        arg_k = arg_k * (ctx.sm_scale * RCP_LN2)
+        k = k * (ctx.sm_scale * RCP_LN2)
         # Scale A cumsum just like K. This is what we did in the forward pass
         # so we also need to do it here.
-        arg_A_cumsum = A_cumsum
-        arg_A_cumsum = arg_A_cumsum * (ctx.sm_scale * RCP_LN2)
+        A_cumsum = A_cumsum * (ctx.sm_scale * RCP_LN2)
         
         PRE_BLOCK = 128
         assert N_CTX % PRE_BLOCK == 0
@@ -686,7 +676,7 @@ class _attention(torch.autograd.Function):
         )
         grid = (N_CTX // BLOCK_N1, 1, BATCH * N_HEAD)
         _attn_bwd[grid](
-            q, arg_k, v, arg_A_cumsum, ctx.sm_scale, do, dq, dk, dv, dA_q, dA_k,  #
+            q, k, v, A_cumsum, ctx.sm_scale, do, dq, dk, dv, dA_q, dA_k,  #
             M, delta,  #
             q.stride(0), q.stride(1), q.stride(2), q.stride(3),  #
             A_cumsum.stride(0), A_cumsum.stride(1),
@@ -768,7 +758,7 @@ def test_op(Z, H, N_CTX, HEAD_DIM, causal, warp_specialize, mode, provider, dtyp
     tri_out = attention(q, k, v, A_cumsum, causal, sm_scale, warp_specialize)
     if mode == "fwd":
         atol = 3 if "fp8" in provider else 1e-2
-        torch.testing.assert_close(tri_out, ref_out, atol=atol, rtol=0)
+        torch.testing.assert_close(tri_out.float(), ref_out.float(), atol=atol, rtol=0)
         return
     tri_out.backward(dout)
     tri_dv, v.grad = v.grad.clone(), None
@@ -776,31 +766,31 @@ def test_op(Z, H, N_CTX, HEAD_DIM, causal, warp_specialize, mode, provider, dtyp
     tri_dq, q.grad = q.grad.clone(), None
     tri_da, A_cumsum.grad = A_cumsum.grad.clone(), None
     # compare
-    torch.testing.assert_close(tri_out, ref_out, atol=1e-2, rtol=0)
+    torch.testing.assert_close(tri_out.float(), ref_out.float(), atol=1e-2, rtol=0)
     rtol = 0.0
     # Relative tolerance workaround for known hardware limitation of CDNA2 GPU.
     # For details see https://pytorch.org/docs/stable/notes/numerical_accuracy.html#reduced-precision-fp16-and-bf16-gemms-and-convolutions-on-amd-instinct-mi200-devices
     if torch.version.hip is not None and triton.runtime.driver.active.get_current_target().arch == "gfx90a":
         rtol = 5e-2
-    torch.testing.assert_close(tri_dv, ref_dv, atol=1e-2, rtol=rtol)
-    torch.testing.assert_close(tri_dk, ref_dk, atol=1e-2, rtol=rtol)
-    torch.testing.assert_close(tri_dq, ref_dq, atol=1e-2, rtol=rtol)
-    torch.testing.assert_close(tri_da, ref_da, atol=1e-2, rtol=rtol)
+    torch.testing.assert_close(tri_dv.float(), ref_dv.float(), atol=1e-2, rtol=rtol)
+    torch.testing.assert_close(tri_dk.float(), ref_dk.float(), atol=1e-2, rtol=rtol)
+    torch.testing.assert_close(tri_dq.float(), ref_dq.float(), atol=1e-2, rtol=rtol)
+    torch.testing.assert_close(tri_da.float(), ref_da.float(), atol=1e-2, rtol=rtol)
     
 
 if __name__ == "__main__":
         
     
-    test_op(
-        16,
-        16,
-        2048,
-        64,
-        causal=True,
-        warp_specialize=False,
-        mode="fwd",
-        provider="triton-fp16",
-    )
+    # test_op(
+    #     16,
+    #     16,
+    #     2048,
+    #     64,
+    #     causal=True,
+    #     warp_specialize=False,
+    #     mode="fwd",
+    #     provider="triton-fp16",
+    # )
 
     test_op(
         16,

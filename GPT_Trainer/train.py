@@ -6,6 +6,7 @@ try:
     from GPT_Trainer.Trainer import Trainer
 except ModuleNotFoundError:
     from Trainer import Trainer
+import argparse
 
 
 
@@ -13,11 +14,11 @@ except ModuleNotFoundError:
 def main():
     # torch.autograd.set_detect_anomaly(True)
     # Create the model trainer
-    batch_size=32 # Total batch size across all gpus (that is, a batch size of 128 with 2 gpus has a gpu batch size of 64)
+    batch_size=64 # Total batch size across all gpus (that is, a batch size of 128 with 2 gpus has a gpu batch size of 64)
     learning_rate=1e-4
     warmup_steps=10_000
     num_steps=1_000_000
-    num_steps_early_stop=100_000
+    num_steps_early_stop=100_000_0
     dev="gpu"
     # wandb_name="fineweb_gated_softmax_no_gate_rmsnorm_softmax_35bs_2gpu_1024seqlen"
     # wandb_name="fineweb_gated_softmax_out_gate_35bs_2gpu_1024seqlen"
@@ -25,18 +26,31 @@ def main():
     # wandb_name="fineweb_linear_NoRoPE_2QKVConv_OutNorm_Order1_64bs_2gpu_1024seqlen"
     # wandb_name="fineweb_poly_4thorder_rootSizedDim_32bs_2gpu_1024seqlen"
     
+    
+    parser = argparse.ArgumentParser()
+    parser.add_argument("seq_len", type=int)
+    parser.add_argument("run_name", type=str)
+    parser.add_argument("attention_type", type=str)
+    args = parser.parse_args()
+    seq_len = args.seq_len
+    run_name = args.run_name
+    attention_type_ = args.attention_type
+    
+    
     # wandb_name="fineweb_Mamba_NoDRes_NoZGate_NoDT_noAProj_noConv__Plus1DivSqrtD_Multihead__32bs_2gpu_16Heads_1024seqlen"
     # wandb_name="Ker_8192L_Medium_2P_NoPE_Conv_AMask_AMaskTypeNEGSOFTPLUS_NOAMaskBias_AMaskValueDiscretizationDT_SMNorm"
     # wandb_name = "SM_8192L_Medium"
     # wandb_name = "Mamba_8192L_Medium"
-    wandb_name = "small_2048sl_gpu_32bs__squared__sm_norm__A_mask_type_neg_softplus__in_conv_k_2__dt_on_values"
+    # wandb_name = "medium_2048sl_gpu_32bs__squared__sm_norm__A_mask_type_neg_softplus__in_conv_k_2__dt_on_values"
+    wandb_name = run_name
     log_steps=10
     use_amp=True
     # attention_type="gated_softmax_no_gate_L2norm_nodivS_noclamp"
     # attention_type="softmax_divS_gatev2"
     # attention_type="softmax"
     # attention_type = "linear_mamba"
-    attention_type = "squared__sm_norm__A_mask_type_neg_softplus__in_conv_k_2__dt_on_values"
+    # attention_type = "squared__sm_norm__A_mask_type_neg_softplus__in_conv_k_2__dt_on_values"
+    attention_type = attention_type_
     # dataset="gmongaras/EleutherAI_the_pile_deduplicated"
     # dataset="gmongaras/SlimPajama-627B_Reupload"
     dataset="HuggingFaceFW/fineweb"
@@ -44,22 +58,25 @@ def main():
     mlp_type="normal" # gelu or normal
     clipping_value=None
     weight_decay=0.01
-    model_save_path = "models/small_2048sl_gpu_32bs__squared__sm_norm__A_mask_type_neg_softplus__in_conv_k_2__dt_on_values"
+    # model_save_path = "models/medium_2048sl_gpu_32bs__squared__sm_norm__A_mask_type_neg_softplus__in_conv_k_2__dt_on_values"
+    model_save_path = f"models/{run_name}"
     # model_save_path = "models/SM_8192L_Medium"
     # model_save_path = "models/Mamba_8192L_Medium"
     num_save_steps = 1_000
     keep_dataset_in_mem = False
-    model_max_length = 2048
+    # model_max_length = 2048
+    model_max_length = seq_len
     test_per = 0.001
     num_steps_test = 10_000
-    model_size = "small" # "small" (~300 million) or "medium" (~810 million) or "large" (~2 billion) or "large_depth"
+    model_size = "medium" # "small" (~300 million) or "medium" (~740 million) or "large" (~2 billion) or "large_depth"
     test_loss = True
 
     
     # Load in a checkpoint
     load_checkpoint = False
-    checkpoint_path = "models/small_2048sl_gpu_32bs__squared__sm_norm__A_mask_type_neg_softplus__in_conv_k_2__dt_on_values/"
+    # checkpoint_path = "models/medium_2048sl_gpu_32bs__squared__sm_norm__A_mask_type_neg_softplus__in_conv_k_2__dt_on_values/"
     # checkpoint_path = "debug_output/0/"
+    checkpoint_path = f"models/{run_name}/"
 
 
     

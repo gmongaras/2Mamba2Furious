@@ -548,7 +548,7 @@ class _attention(torch.autograd.Function):
         HEAD_DIM_Q, HEAD_DIM_K = q.shape[-1], k.shape[-1]
         HEAD_DIM_V = v.shape[-1]
         assert HEAD_DIM_Q == HEAD_DIM_K and HEAD_DIM_K == HEAD_DIM_V
-        assert HEAD_DIM_K in {16, 32, 64, 128, 256}
+        assert HEAD_DIM_K in {16, 32, 64, 128, 256, 512}
         o = torch.empty_like(q).float()
         stage = 3 if causal else 1
         extra_kern_args = {}
@@ -788,7 +788,7 @@ if __name__ == "__main__":
         2,
         4,
         1024,
-        64,
+        128,
         causal=True,
         warp_specialize=False,
         mode="bwd",

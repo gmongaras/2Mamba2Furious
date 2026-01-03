@@ -442,6 +442,22 @@ configs = {
         "A_mask_type": "none",
         "precompute_attn_mask": True,
     },
+    # w=4
+    "linear__output_norm__in_conv_k_4": {
+        "use_kernel": True,
+        "power": "1",
+        "qk_activation_type": "none",
+        "use_in_conv": True,
+        "in_conv_dim": 4,
+        "use_NoPE": True,
+        "use_D_res": False,
+        "use_z_out_gate": False,
+        "norm_type": "output_norm",
+        "use_dt_bias": False,
+        "value_disc_dtype": "none",
+        "A_mask_type": "none",
+        "precompute_attn_mask": True,
+    },
     
     # (8) + in conv (ws = 2) + silu
     # Changes from linear:
@@ -454,6 +470,38 @@ configs = {
         "qk_activation_type": "silu",
         "use_in_conv": True,
         "in_conv_dim": 2,
+        "use_NoPE": True,
+        "use_D_res": False,
+        "use_z_out_gate": False,
+        "norm_type": "output_norm",
+        "use_dt_bias": False,
+        "value_disc_dtype": "none",
+        "A_mask_type": "none",
+        "precompute_attn_mask": True,
+    },
+    # w=3
+    "linear__output_norm__in_conv_k_3__silu": {
+        "use_kernel": True,
+        "power": "1",
+        "qk_activation_type": "silu",
+        "use_in_conv": True,
+        "in_conv_dim": 3,
+        "use_NoPE": True,
+        "use_D_res": False,
+        "use_z_out_gate": False,
+        "norm_type": "output_norm",
+        "use_dt_bias": False,
+        "value_disc_dtype": "none",
+        "A_mask_type": "none",
+        "precompute_attn_mask": True,
+    },
+    # w=4
+    "linear__output_norm__in_conv_k_4__silu": {
+        "use_kernel": True,
+        "power": "1",
+        "qk_activation_type": "silu",
+        "use_in_conv": True,
+        "in_conv_dim": 4,
         "use_NoPE": True,
         "use_D_res": False,
         "use_z_out_gate": False,
@@ -759,6 +807,102 @@ configs = {
         "precompute_attn_mask": True,
     },
     
+    # basically 21 without dt
+    # (22) - (method 16 with A mask and in conv) + squared + sm norm
+    # Changes from linear:
+    # - qk squared
+    # - use sm norm
+    # - use A mask (neg_softplus method)
+    # - in conv (window size of 2)
+    "squared__sm_norm__A_mask_type_neg_softplus__in_conv_k_2": {
+        "use_kernel": True,
+        "power": "2",
+        "qk_activation_type": "none",
+        "use_in_conv": True,
+        "in_conv_dim": 2,
+        "use_NoPE": True,
+        "use_D_res": False,
+        "use_z_out_gate": False,
+        "norm_type": "sm_norm",
+        "use_dt_bias": False,
+        "value_disc_dtype": "none",
+        "A_mask_type": "neg_softplus",
+        "precompute_attn_mask": True,
+    },
+    
+    
+    # basically 22, but linear for experiments with the hidden state
+    # (23) - (method 22 with A mask and in conv) + linear + out norm
+    # Changes from 22:
+    # - qk linear
+    # - use out norm
+    # - use A mask (neg_softplus method)
+    # - in conv (window size of 2)
+    "linear__out_norm__A_mask_type_neg_softplus__in_conv_k_2": {
+        "use_kernel": True,
+        "power": "1",
+        "qk_activation_type": "none",
+        "use_in_conv": True,
+        "in_conv_dim": 2,
+        "use_NoPE": True,
+        "use_D_res": False,
+        "use_z_out_gate": False,
+        "norm_type": "output_norm",
+        "use_dt_bias": False,
+        "value_disc_dtype": "none",
+        "A_mask_type": "neg_softplus",
+        "precompute_attn_mask": True,
+    },
+    
+    
+    
+    
+    
+    # (24) - (method 21 with A mask, in conv, and dt) + exp + sm norm
+    # Changes from linear:
+    # - qk exp
+    # - use sm norm
+    # - use A mask (neg_softplus method)
+    # - in conv (window size of 2)
+    # - dt on values (dt)
+    "exp__sm_norm__A_mask_type_neg_softplus__in_conv_k_2__dt_on_values": {
+        "use_kernel": True,
+        "power": "exp",
+        "qk_activation_type": "none",
+        "use_in_conv": True,
+        "in_conv_dim": 2,
+        "use_NoPE": True,
+        "use_D_res": False,
+        "use_z_out_gate": False,
+        "norm_type": "sm_norm",
+        "use_dt_bias": False,
+        "value_disc_dtype": "dt",
+        "A_mask_type": "neg_softplus",
+        "precompute_attn_mask": True,
+    },
+    
+    # (25) - (method 22 with A mask, in conv) + exp + sm norm
+    # Changes from linear:
+    # - qk exp
+    # - use sm norm
+    # - use A mask (neg_softplus method)
+    # - in conv (window size of 2)
+    "exp__sm_norm__A_mask_type_neg_softplus__in_conv_k_2": {
+        "use_kernel": True,
+        "power": "exp",
+        "qk_activation_type": "none",
+        "use_in_conv": True,
+        "in_conv_dim": 2,
+        "use_NoPE": True,
+        "use_D_res": False,
+        "use_z_out_gate": False,
+        "norm_type": "sm_norm",
+        "use_dt_bias": False,
+        "value_disc_dtype": "none",
+        "A_mask_type": "neg_softplus",
+        "precompute_attn_mask": True,
+    },
+    
 }
 
 
@@ -780,6 +924,7 @@ class LlamaAttention(nn.Module):
         
         # Bunch o stuff >w<
         self.head_dim = config.hidden_size // config.num_attention_heads
+        assert self.head_dim == config.head_dim
         self.num_heads = config.num_attention_heads
         self.num_key_value_groups = config.num_attention_heads // config.num_key_value_heads
         self.is_causal = True
@@ -832,8 +977,8 @@ class LlamaAttention(nn.Module):
                 d_conv=2,
                 conv_init=None,
                 expand=1,
-                headdim=config.head_dim,
-                d_ssm=config.head_dim,
+                headdim=self.head_dim,
+                d_ssm=self.head_dim,
                 ngroups=1,
                 A_init_range=(1, 16),
                 D_has_hdim=True,
@@ -1287,9 +1432,9 @@ class LlamaAttention(nn.Module):
                     # Kernel, no A mask
                     if A is None:
                         attn_output = LinearKernel.apply(
-                            query_states.half(), 
-                            key_states.half(), 
-                            value_states.half(), 
+                            query_states.float(), 
+                            key_states.float(), 
+                            value_states.float(), 
                             True, 
                             (1/math.sqrt(key_states.shape[-1])), 
                             False
@@ -1297,9 +1442,9 @@ class LlamaAttention(nn.Module):
                     # Kernel with A mask
                     else:
                         attn_output = LinearKernelAMask.apply(
-                            query_states.half(), 
-                            key_states.half(), 
-                            value_states.half(), 
+                            query_states.float(), 
+                            key_states.float(), 
+                            value_states.float(), 
                             A.mT.float().cumsum(-1),
                             True, 
                             (1/math.sqrt(key_states.shape[-1])), 
@@ -1310,14 +1455,13 @@ class LlamaAttention(nn.Module):
                     # Kernel, no A mask
                     if A is None:
                         attn_output = LinearKernelSMNorm.apply(
-                            query_states.half(), 
-                            key_states.half(), 
-                            value_states.half(), 
+                            query_states.float(), 
+                            key_states.float(), 
+                            value_states.float(), 
                             True, 
                             (1/math.sqrt(key_states.shape[-1])), 
                             False
                         )
-                        print()
                     # Kernel with A mask
                     else:
                         assert False
@@ -1329,9 +1473,9 @@ class LlamaAttention(nn.Module):
                 # No normalization in the kernel
                 if self.norm_type == "output_norm":
                     attn_output = SquaredKernelAMask.apply(
-                        query_states.half(), 
-                        key_states.half(), 
-                        value_states.half(), 
+                        query_states.float(), 
+                        key_states.float(), 
+                        value_states.float(), 
                         A.mT.float().cumsum(-1),
                         True, 
                         (1/math.sqrt(key_states.shape[-1])), 
@@ -1340,9 +1484,9 @@ class LlamaAttention(nn.Module):
                 # Online sm norm in the kernel
                 elif self.norm_type == "sm_norm":
                     attn_output = _2Mamba2Furious_square.apply(
-                        query_states.half(), 
-                        key_states.half(), 
-                        value_states.half(), 
+                        query_states.float(), 
+                        key_states.float(), 
+                        value_states.float(), 
                         A.mT.float().cumsum(-1),
                         True, 
                         1/math.sqrt(key_states.shape[-1]), 
@@ -1361,9 +1505,9 @@ class LlamaAttention(nn.Module):
                         assert False
                     else:
                         attn_output = _2Mamba2Furious_exp.apply(
-                            query_states.half(), 
-                            key_states.half(), 
-                            value_states.half(), 
+                            query_states.float(), 
+                            key_states.float(), 
+                            value_states.float(), 
                             A.mT.float().cumsum(-1),
                             True, 
                             1/math.sqrt(key_states.shape[-1]), 
@@ -1503,7 +1647,7 @@ if __name__ == "__main__":
             "torch_dtype": "float16",
             "use_cache": True,
             "vocab_size": 1024,
-            "attention_type": "linear",
+            "attention_type": "exp__sm_norm__A_mask_type_neg_softplus__in_conv_k_2",
         })
     layer = LlamaDecoderLayer(config=config, layer_idx=0).cuda()
     hidden_states = torch.randn(B, L, d).cuda()
@@ -1512,7 +1656,14 @@ if __name__ == "__main__":
     attention_mask = None
     out = layer.forward(
         hidden_states,
-        # attention_mask,
-        # position_embeddings,
     )
     # out.sum().backward()
+    
+    
+    with torch.autograd.profiler.profile(use_device="cuda", with_stack=True, with_flops=True) as prof:
+        with torch.autograd.profiler.record_function("fw_pass"):
+            loss = layer.forward(hidden_states,)[0].sum()
+        with torch.autograd.profiler.record_function("bw_pass"):
+            loss.backward() 
+    
+    print(prof.key_averages().table(sort_by="cuda_time_total"))
