@@ -14,11 +14,11 @@ import argparse
 def main():
     # torch.autograd.set_detect_anomaly(True)
     # Create the model trainer
-    batch_size=64 # Total batch size across all gpus (that is, a batch size of 128 with 2 gpus has a gpu batch size of 64)
+    batch_size=32 # Total batch size across all gpus (that is, a batch size of 128 with 2 gpus has a gpu batch size of 64)
     learning_rate=1e-4
     warmup_steps=10_000
     num_steps=1_000_000
-    num_steps_early_stop=100_000_0
+    num_steps_early_stop=100_000
     dev="gpu"
     # wandb_name="fineweb_gated_softmax_no_gate_rmsnorm_softmax_35bs_2gpu_1024seqlen"
     # wandb_name="fineweb_gated_softmax_out_gate_35bs_2gpu_1024seqlen"

@@ -11,10 +11,10 @@ import safetensors
 
 try:
     from GPT_Trainer.multi_gpu_helpers import is_main_process
-    from GPT_Trainer.LlamaDecoderLayer import LlamaDecoderLayer
+    from GPT_Trainer.LlamaDecoderLayerClean import LlamaDecoderLayer
 except ModuleNotFoundError:
     from multi_gpu_helpers import is_main_process
-    from LlamaDecoderLayer import LlamaDecoderLayer
+    from LlamaDecoderLayerClean import LlamaDecoderLayer
 
 
 
@@ -23,10 +23,10 @@ except ModuleNotFoundError:
 @torch.no_grad()
 def infer():
     # Path to the model
-    attention_type = "gated_softmax_plusplus_extratoks"
-    model_path = "models/fineweb_gated_softmax_plusplus_extratoks_35bs_2gpu_1024seqlenV2/"
+    attention_type = "softmax"
+    model_path = "models/medium_8192sl_gpu_32bs__softmax/"
     device = "cuda:0"
-    model_max_length = 1024
+    model_max_length = 8192
 
 
     # Read token from .env file
@@ -55,14 +55,14 @@ def infer():
         "bos_token_id": 1,
         "eos_token_id": 2,
         "hidden_act": "silu",
-        "hidden_size": 1024, #4096,
+        "hidden_size": 1024+512, #4096,
         "initializer_range": 0.02,
-        "intermediate_size": 1024*2, # 11008
+        "intermediate_size": 1024*3, # 11008
         "max_position_embeddings": model_max_length,
         "model_type": "llama",
-        "num_attention_heads": 16,
-        "num_hidden_layers": 20,
-        "num_key_value_heads": 16,
+        "num_attention_heads": 24,
+        "num_hidden_layers": 27,
+        "num_key_value_heads": 24,
         "pretraining_tp": 1,
         "rms_norm_eps": 1e-05,
         "rope_scaling": None,
@@ -108,7 +108,7 @@ def infer():
     inputs = tokenizer(sentence, return_tensors="pt")
     inputs = {k: v.cuda() for k, v in inputs.items()}
     
-    
+    output_tokens = list(inputs["input_ids"][0].detach().cpu().numpy())
     for i in range(len(inputs["input_ids"][0]), model_max_length):
         # Get the logits
         if attention_type == "cos":
@@ -140,8 +140,12 @@ def infer():
             break
         
         # Add the next word to the input
+        output_tokens.append(next_word.item())
         inputs["input_ids"] = torch.cat([inputs["input_ids"], next_word.unsqueeze(0).unsqueeze(0)], dim=1)
         inputs["attention_mask"] = torch.cat([inputs["attention_mask"], torch.ones(1, 1).cuda()], dim=1)
+        # if i % 10 == 0:
+        #     print(tokenizer.decode(output_tokens))
+        print(inputs["input_ids"].shape)
         
     # Decode the output
     decoded = tokenizer.decode(inputs["input_ids"][0])

@@ -940,6 +940,14 @@ class LlamaAttention(nn.Module):
         layer_config = configs[config.attention_type]
         
         
+        # For inference time
+        self.use_efficient = False
+        self.hidden_conv = None
+        self.hidden_num = None
+        self.hidden_denom = None
+        self.is_inference = False
+                
+        
         
         # Fast path - 
         # Full softmax attention will use RoPE and just have
@@ -960,6 +968,10 @@ class LlamaAttention(nn.Module):
             self.o_proj = nn.Linear(
                 config.num_attention_heads * self.head_dim, config.hidden_size, bias=config.attention_bias
             )
+            
+            # Softmax inference params
+            self.k_cache = None
+            self.v_cache = None
             
             return
             
@@ -1180,14 +1192,6 @@ class LlamaAttention(nn.Module):
                 "attn_mask",
                 ~torch.tril(torch.ones(max_seq_len, max_seq_len)).bool()[None, None, :, :]
             )
-        
-            
-        # For inference time
-        self.use_efficient = False
-        self.hidden_conv = None
-        self.hidden_num = None
-        self.hidden_denom = None
-        self.is_inference = False
 
 
 
@@ -1223,26 +1227,45 @@ class LlamaAttention(nn.Module):
             key_states = key_states.view(hidden_shape).transpose(1, 2)
             value_states = value_states.view(hidden_shape).transpose(1, 2)
             
+            # Efficient path will use the KV cache
+            if self.is_inference and self.use_efficient and self.k_cache is not None:
+                # Concat past keys and values
+                key_states = torch.cat((self.k_cache, key_states), dim=-2)
+                value_states = torch.cat((self.v_cache, value_states), dim=-2)
+                
+                # Offset for queries
+                RoPE_offset = key_states.shape[-2]-1
+                causal_ = False
+            else:
+                RoPE_offset = 0
+                causal_ = True
+                
+            # Store KV cache
+            if self.is_inference and self.use_efficient:
+                # Store KV cache
+                self.k_cache = key_states.clone()
+                self.v_cache = value_states.clone()
+                
             # RoPE
-            query_states = self.rotary_emb.rotate_queries_or_keys(query_states)
+            query_states = self.rotary_emb.rotate_queries_or_keys(query_states, offset=RoPE_offset)
             key_states = self.rotary_emb.rotate_queries_or_keys(key_states)
-            
-            # spda because I don't feel like writing a kernel
+                
+            # sdpa because I don't feel like writing a kernel
             def forward_(query, key, value, scale):
                 return torch.nn.functional.scaled_dot_product_attention(
-                                query, 
+                                query,
                                 key, 
                                 value, 
                                 attn_mask=None, 
                                 dropout_p=0.0, 
-                                is_causal=True, 
+                                is_causal=causal_,  
                                 scale=scale, 
                                 enable_gqa=False
                 )
             attn_output = checkpoint(
                 forward_, query_states, key_states, value_states, (1/math.sqrt(key_states.shape[-1])),
             )
-            
+                
             # Remove heads
             attn_output = attn_output.transpose(1, 2).reshape(*input_shape, -1).contiguous()
 
