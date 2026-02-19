@@ -12,7 +12,7 @@
 
 
 
-            // "program": "kernel/_2Mamba2Furious_V2.py",
+            // "program": "kernel/_2Mamba2Furious_square2.py",
             // "env": {
             //         "CUDA_LAUNCH_BLOCKING": "1",
             //         "CUDA_VISIBLE_DEVICES": "4",
@@ -27,12 +27,25 @@
             //         "CUDA_VISIBLE_DEVICES": "1",
             //     },
 
+
+            // "program": "GPT_Trainer/LlamaDecoderLayerClean.py",
+            // "program": "grad_test.py",
+
+
+            // "program": "kernel/LinearKernelAMask.py",
+            // "program": "kernel/_2Mamba2Furious_exp.py",
+            // "program": "GPT_Trainer/niah.py",
+            // "program": "niah_heatmap.py",
+
                 
             "program": "/home/gmongaras/miniconda3/bin/torchrun",
             "args": [
                 "--nproc_per_node=2",
-                "--master-port", "29523",
+                "--master-port", "29524",
                 "GPT_Trainer/train.py",
+                "8192",
+                "medium_8192sl_gpu_32bs__exp__sm_norm__A_mask_type_neg_softplus__in_conv_k_2__dt_on_values", 
+                "exp__sm_norm__A_mask_type_neg_softplus__in_conv_k_2__dt_on_values"
             ],
             "env": {
                     "CUDA_LAUNCH_BLOCKING": "1", 
