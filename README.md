@@ -1,6 +1,6 @@
 # <Paper title>
 
-This repo is code used for experiments in the paper <Paper title>.
+This repo is code used for experiments in the paper 2Mama2Furious: Linear in complexity, competitive in accuracy.
 
 Unfiltered experiments conducted before writing the paper are supplied at [https://wandb.ai/gmongaras1/Gated_Attention_V2](https://wandb.ai/gmongaras1/Gated_Attention_V2) [https://wandb.ai/gmongaras1/Mamba_buildup](https://wandb.ai/gmongaras1/Mamba_buildup). Experiments from the paper as well as other experiments that never got into the paper are supplied at [https://wandb.ai/gmongaras1/Mamba_Squared_Experiemnts](https://wandb.ai/gmongaras1/Mamba_Squared_Experiemnts)
 
