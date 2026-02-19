@@ -1,3 +1,6 @@
 [submodule "Triton_Efficient_Kronecker_Product"]
 	path = Triton_Efficient_Kronecker_Product
 	url = https://github.com/gmongaras/Triton-Efficient-Kronecker-Product.git
+[submodule "wandb_graphs/Wandb_Plotting_Tool"]
+	path = wandb_graphs/Wandb_Plotting_Tool
+	url = https://github.com/gmongaras/Wandb_Plotting_Tool
