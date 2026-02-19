@@ -41,6 +41,55 @@ except ModuleNotFoundError:
 
 
 
+def infer_(prompt, num_outputs, model, tokenizer, sample, use_efficient, no_eos_token=False, decode_output=True):
+    # Reset states
+    for layer in model.model.layers:
+        layer.self_attn.reset_inference_states()
+        
+    # Tokenize the prompt
+    inputs = tokenizer(prompt, return_tensors="pt")
+    inputs = {k: v.cuda() for k, v in inputs.items()}
+        
+    output_tokens = list(inputs["input_ids"][0].detach().cpu().numpy())
+    for i in range(len(inputs["input_ids"][0]), len(inputs["input_ids"][0])+num_outputs):
+        # Get the logits
+        input_ids = inputs["input_ids"].to(model.device)
+        attention_mask = inputs["attention_mask"].to(model.device)
+        outputs = model(input_ids, attention_mask=attention_mask)
+            
+        # Get the predicted next word
+        logits = outputs.logits[0, -1]
+        
+        # Set prob of <|endoftext|> to 0
+        if no_eos_token:
+            logits[50256] = -float("inf")
+        
+        # Sample or argmax
+        if sample:
+            dist = torch.distributions.Categorical(logits=logits)
+            next_word = dist.sample()
+        else:
+            next_word = logits.argmax(-1)
+        
+        if next_word == tokenizer.eos_token_id:
+            break
+        
+        # Add the next word to the input
+        output_tokens.append(next_word.item())
+        if use_efficient:
+            inputs["input_ids"] = next_word.unsqueeze(0).unsqueeze(0)
+            inputs["attention_mask"] = torch.ones(1, 1).cuda()
+        else:
+            inputs["input_ids"] = torch.cat([inputs["input_ids"], next_word.unsqueeze(0).unsqueeze(0)], dim=1)
+            inputs["attention_mask"] = torch.cat([inputs["attention_mask"], torch.ones(1, 1).cuda()], dim=1)
+        if i % 10 == 0:
+            # print(tokenizer.decode(output_tokens))
+            pass
+    
+    if decode_output:
+        return tokenizer.decode(output_tokens)
+    return output_tokens
+
 
 
 @torch.no_grad()
@@ -51,6 +100,9 @@ def infer():
     device = "cuda:0"
     model_max_length = 8192
     use_efficient = True
+    sample = True
+    no_eos_token = False
+    decode_output = True
 
 
     # Read token from .env file
@@ -118,58 +170,12 @@ def infer():
 
 # What is the pass key? The pass key is """.strip() + " "
     
-    
-    # Tokenize the sentence
-    inputs = tokenizer(sentence, return_tensors="pt")
-    inputs = {k: v.cuda() for k, v in inputs.items()}
-    
     # labels = inputs["labels"].to(model.device)
     
-    output_tokens = list(inputs["input_ids"][0].detach().cpu().numpy())
-    for i in range(len(inputs["input_ids"][0]), model_max_length):
-        # Get the logits
-        input_ids = inputs["input_ids"].to(model.device)
-        attention_mask = inputs["attention_mask"].to(model.device)
-        outputs = model(input_ids, attention_mask=attention_mask)
-            
-        # for attn in outputs.attentions:
-        #     # Matplotlib attention heatmap
-        #     import matplotlib.pyplot as plt
-        #     probs = attn[0].detach().cpu().numpy()
-        #     for head in range(probs.shape[0]):
-        #         # Shape is (num_heads, seq_len, seq_len)
-        #         plt.imshow(probs[head])
-        #         plt.show()
-        #         if not os.path.exists("imgs"):
-        #             os.makedirs("imgs")
-        #         plt.savefig(f"imgs/attention{head}.png")
-                
-        #     print()
-            
-        # Get the predicted next word
-        logits = outputs.logits[0, -1]
-        # Set prob of <|endoftext|> to 0
-        # logits[50256] = -float("inf")
-        dist = torch.distributions.Categorical(logits=logits)
-        # next_word = dist.sample()
-        next_word = logits.argmax(-1)
-        if next_word == tokenizer.eos_token_id:
-            break
-        
-        # Add the next word to the input
-        output_tokens.append(next_word.item())
-        if use_efficient:
-            inputs["input_ids"] = next_word.unsqueeze(0).unsqueeze(0)
-            inputs["attention_mask"] = torch.ones(1, 1).cuda()
-        else:
-            inputs["input_ids"] = torch.cat([inputs["input_ids"], next_word.unsqueeze(0).unsqueeze(0)], dim=1)
-            inputs["attention_mask"] = torch.cat([inputs["attention_mask"], torch.ones(1, 1).cuda()], dim=1)
-        if i % 10 == 0:
-            # print(tokenizer.decode(output_tokens))
-            pass
+    decoded = infer_(sentence, model_max_length, model, tokenizer, sample, use_efficient, no_eos_token, decode_output)
         
     # Decode the output
-    decoded = tokenizer.decode(output_tokens)
+    # decoded = tokenizer.decode(output_tokens)
     
     print(decoded)
     

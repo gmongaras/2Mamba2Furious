@@ -60,7 +60,7 @@ def _attn_fwd_inner(acc, l_i, m_i, q, A_q,  #
         start_n = tl.multiple_of(start_n, BLOCK_N)
         # -- compute qk ----
         k = desc_k.load([offsetk_y, 0]).T.to(tl.float32)
-        qk = tl.dot(q, k)
+        qk = tl.dot(q, k, input_precision="tf32")
         
         # Compute A mask
         A_k = desc_A_k.load([offsetk_y]).to(tl.float32)
@@ -103,7 +103,7 @@ def _attn_fwd_inner(acc, l_i, m_i, q, A_q,  #
         
         # Inner product with v to get output (without denominator. That will be applied
         # after the entire block sum is computed via the l sum tensor)
-        acc = tl.dot(p, v, acc)
+        acc = tl.dot(p, v, acc, input_precision="tf32")
         
         # Compute denominator value
         l_ij = tl.sum(p, 1)
@@ -303,7 +303,7 @@ def _attn_bwd_preprocess_inner(acc, do, q, A_q, m, #
         start_n = tl.multiple_of(start_n, BLOCK_N)
         # -- compute qk ----
         kT = desc_k.load([offsetk_y, 0]).T.to(tl.float32)
-        qk = tl.dot(q, kT)
+        qk = tl.dot(q, kT, input_precision="tf32")
         
         # Compute A mask
         A_k = desc_A_k.load([offsetk_y]).to(tl.float32)
@@ -323,7 +323,7 @@ def _attn_bwd_preprocess_inner(acc, do, q, A_q, m, #
             
         # Compute dp = do vT
         vT = desc_v.load([offsetv_y, 0]).T.to(tl.float32)
-        dp = tl.dot(do, vT)
+        dp = tl.dot(do, vT, input_precision="tf32x3")
         
         # scalar-wise multiply dp and normalized p
         grad = dp * p
@@ -460,7 +460,7 @@ def _attn_bwd_dkdv(dk, dv, da_k,  #
         s = tl.load(S + offs_m).to(tl.float32)
         
         # Compute qk**2
-        qkT = tl.dot(k, qT)
+        qkT = tl.dot(k, qT, input_precision="tf32")
         qkT2 = qkT * qkT
         
         # Compute the A mask and exponentiate the negative max
@@ -479,10 +479,10 @@ def _attn_bwd_dkdv(dk, dv, da_k,  #
             
         # Compute dp
         do = tl.load(do_ptrs).to(tl.float32)
-        dpT = tl.dot(v, tl.trans(do))
+        dpT = tl.dot(v, tl.trans(do), input_precision="tf32x3")
             
         # Compute dV.
-        dv = tl.dot(pT, do, dv)
+        dv = tl.dot(pT, do, dv, input_precision="tf32")
         
         # squaremax derivative
         dsT = A_maskTm * (dpT - s[None, :])
@@ -493,7 +493,7 @@ def _attn_bwd_dkdv(dk, dv, da_k,  #
             dqkT = tl.where(mask, dqkT, 0.0)
         
         # Accumulate dk grads
-        dk = tl.dot(dqkT, tl.trans(qT), dk)
+        dk = tl.dot(dqkT, tl.trans(qT), dk, input_precision="tf32x3")
         
         # Multiply by qk2 to get the da grad
         daT = dsT * qkT2
@@ -541,7 +541,7 @@ def _attn_bwd_dqda(dq, da_q, q, K, V, A, Aq,  #
         vT = tl.load(vT_ptrs).to(tl.float32)
         
         # Compute qk**2
-        qk = tl.dot(q, kT)
+        qk = tl.dot(q, kT, input_precision="tf32")
         qk2 = qk * qk
         
         # Compute the A mask and exponentiate the negative max
@@ -552,7 +552,7 @@ def _attn_bwd_dqda(dq, da_q, q, K, V, A, Aq,  #
         A_maskm = tl.where(A_maskm < -1024, 0.0, tl.exp2(A_maskm)) # Mask where pre exp was less than -1024 to zero
             
         # Compute dp
-        dp = tl.dot(do, vT)
+        dp = tl.dot(do, vT, input_precision="tf32x3")
             
         # squaremax derivative.
         ds = A_maskm * (dp - s)
@@ -566,7 +566,7 @@ def _attn_bwd_dqda(dq, da_q, q, K, V, A, Aq,  #
             dqk = tl.where(mask, dqk, 0.0)
         
         # Accumulate dq grads
-        dq = tl.dot(dqk, tl.trans(kT), dq)
+        dq = tl.dot(dqk, tl.trans(kT), dq, input_precision="tf32x3")
         
         # Multiply by qk2 to get the da grad
         da = ds * qk2
@@ -848,7 +848,7 @@ class _attention(torch.autograd.Function):
         BATCH, N_HEAD, N_CTX = q.shape[:3]
         PRE_BLOCK = 128
         NUM_WARPS, NUM_STAGES = 4, 5
-        BLOCK_M1, BLOCK_N1, BLOCK_M2, BLOCK_N2 = 32, 128, 128, 32
+        BLOCK_M1, BLOCK_N1, BLOCK_M2, BLOCK_N2 = 32, 64, 64, 32
         BLK_SLICE_FACTOR = 2
         RCP_LN2 = 1.4426950408889634  # = 1.0 / ln(2)
         

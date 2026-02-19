@@ -73,13 +73,15 @@ def _attn_fwd_inner(acc, l_i, m_i, q, A_q,  #
         # Masking diag and off diag
         if STAGE == 2:
             mask = offs_m[:, None] >= (start_n + offs_n[None, :])
-            qk = qk * qk_scale + tl.where(mask, 0, -1.0e6)
+            qk = tl.where(mask, qk * qk_scale, -1e12)
             m_ij = tl.maximum(m_i, tl.max(qk, 1))
             qk -= m_ij[:, None]
         else:
             m_ij = tl.maximum(m_i, tl.max(qk, 1) * qk_scale)
             qk = qk * qk_scale - m_ij[:, None]
         p = tl.where(qk < -1024, 0.0, tl.exp2(qk)) # Mask where pre exp was less than -1024 to zero
+        if STAGE == 2:
+            p = tl.where(mask, p, 0.0)
         # p = tl.math.exp2(qk)
         
         # # Multiply by A mask
@@ -215,7 +217,7 @@ def _attn_fwd(sm_scale, M,  #
     offs_n = tl.arange(0, BLOCK_N)
     # initialize pointer to m and l
     m_i = tl.zeros([BLOCK_M], dtype=tl.float32) - float("inf")
-    l_i = tl.zeros([BLOCK_M], dtype=tl.float32) + 1.0
+    l_i = tl.zeros([BLOCK_M], dtype=tl.float32)
     acc = tl.zeros([BLOCK_M, HEAD_DIM], dtype=tl.float32)
     # load scales
     qk_scale = sm_scale
@@ -244,6 +246,10 @@ def _attn_fwd(sm_scale, M,  #
                                         2, offs_m, offs_n, N_CTX,  #
                                         warp_specialize, IS_HOPPER)
     # epilogue
+    
+    # Dont let the denominator get too small
+    l_i = tl.where(l_i > 1e-12, l_i, 1e-12)
+    
     m_i += tl.math.log2(l_i)
     acc = acc / l_i[:, None]
     m_ptrs = M + off_hz * N_CTX + offs_m
@@ -638,12 +644,13 @@ class _attention(torch.autograd.Function):
     @staticmethod
     def backward(ctx, do):
         q, k, v, o, M, A_cumsum = ctx.saved_tensors
-        do = do.contiguous()
-        q = q.contiguous()
-        k = k.contiguous()
-        v = v.contiguous()
-        o = o.contiguous()
-        A_cumsum = A_cumsum.contiguous()
+        do = do.float().contiguous()
+        q = q.float().contiguous()
+        k = k.float().contiguous()
+        v = v.float().contiguous()
+        o = o.float().contiguous()
+        M = M.float().contiguous()
+        A_cumsum = A_cumsum.float().contiguous()
         # assert do.is_contiguous()
         # assert q.stride() == k.stride() == v.stride() == o.stride() == do.stride()
         dq = torch.empty_like(q)
@@ -713,17 +720,17 @@ def test_op(Z, H, N_CTX, HEAD_DIM, causal, warp_specialize, mode, provider, dtyp
     # if mode == "bwd" and "fp8" in provider:
     #     pytest.skip("Backward pass with FP8 is not supported.")
     torch.manual_seed(20)
-    q = (torch.empty((Z, H, N_CTX, HEAD_DIM), dtype=dtype, device=DEVICE).normal_(mean=0.0, std=0.5).requires_grad_())
-    k = (torch.empty((Z, H, N_CTX, HEAD_DIM), dtype=dtype, device=DEVICE).normal_(mean=0.0, std=0.5).requires_grad_())
-    v = (torch.empty((Z, H, N_CTX, HEAD_DIM), dtype=dtype, device=DEVICE).normal_(mean=0.0, std=0.5).requires_grad_())
+    q_ = (torch.empty((Z, H, N_CTX, HEAD_DIM), dtype=dtype, device=DEVICE).normal_(mean=0.0, std=0.5).requires_grad_())
+    k_ = (torch.empty((Z, H, N_CTX, HEAD_DIM), dtype=dtype, device=DEVICE).normal_(mean=0.0, std=0.5).requires_grad_())
+    v_ = (torch.empty((Z, H, N_CTX, HEAD_DIM), dtype=dtype, device=DEVICE).normal_(mean=0.0, std=0.5).requires_grad_())
     sm_scale = 0.5
     # reference implementation
-    ref_dtype = dtype
+    ref_dtype = torch.float32
     if mode == "fwd" and "fp8" in provider:
         ref_dtype = torch.float32
-    q = q.to(ref_dtype)
-    k = k.to(ref_dtype)
-    v = v.to(ref_dtype)
+    q = q_.to(ref_dtype).detach().requires_grad_()
+    k = k_.to(ref_dtype).detach().requires_grad_()
+    v = v_.to(ref_dtype).detach().requires_grad_()
     
     # Create A mask
     A = -torch.nn.functional.softplus(torch.empty(Z, H, N_CTX, device=DEVICE).normal_(mean=0.0, std=0.5).requires_grad_())
@@ -740,7 +747,7 @@ def test_op(Z, H, N_CTX, HEAD_DIM, causal, warp_specialize, mode, provider, dtyp
     p = p / p.sum(dim=-1, keepdim=True)
     p = p.to(ref_dtype)
     # p = torch.exp(p)
-    ref_out = torch.matmul(p, v).half()
+    ref_out = torch.matmul(p, v).float()
     if mode == "bwd":
         dout = torch.randn_like(q)
         ref_out.backward(dout)

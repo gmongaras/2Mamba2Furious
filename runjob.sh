@@ -1,17 +1,17 @@
 #!/bin/bash
 
 #SBATCH -A eclarson_sm_taylor_0001
-#SBATCH --job-name="8192 squared__sm_norm__A_mask_type_neg_softplus__in_conv_k_2 >w<_Gated_Softmax"
+#SBATCH --job-name="8192 squared >w<_Gated_Softmax"
 #SBATCH -p batch
 ####SBATCH --exclusive
 #SBATCH -o runjob.out
-#SBATCH --nodes=4
+#SBATCH --nodes=2
 #SBATCH --gres=gpu:8
 #SBATCH --mem=500G
 #SBATCH --exclude=bcm-dgxa100-0012
 
 seq_len="8192"
-run_name="medium_8192sl_gpu_64bs__squared__sm_norm__A_mask_type_neg_softplus__in_conv_k_2"
+run_name="slimpj_medium_8192sl_gpu_32bs__squared__sm_norm__A_mask_type_neg_softplus__in_conv_k_2"
 attention_type="squared__sm_norm__A_mask_type_neg_softplus__in_conv_k_2"
 
 
@@ -20,7 +20,7 @@ attention_type="squared__sm_norm__A_mask_type_neg_softplus__in_conv_k_2"
 
 
 # Number of nodes
-nnodes=4
+nnodes=2
 # Number of tasks per node
 nproc_per_node=8
 
@@ -57,5 +57,5 @@ srun /home/gmongaras/miniconda3/bin/torchrun \
 --nproc_per_node $nproc_per_node \
 --rdzv_id $RANDOM \
 --rdzv_backend c10d \
---rdzv_endpoint $head_node_ip:30110 \
+--rdzv_endpoint $head_node_ip:30154 \
 GPT_Trainer/train.py $seq_len $run_name $attention_type

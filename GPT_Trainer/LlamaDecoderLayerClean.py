@@ -942,10 +942,8 @@ class LlamaAttention(nn.Module):
         
         # For inference time
         self.use_efficient = False
-        self.hidden_conv = None
-        self.hidden_num = None
-        self.hidden_denom = None
         self.is_inference = False
+        self.reset_inference_states()
                 
         
         
@@ -968,10 +966,6 @@ class LlamaAttention(nn.Module):
             self.o_proj = nn.Linear(
                 config.num_attention_heads * self.head_dim, config.hidden_size, bias=config.attention_bias
             )
-            
-            # Softmax inference params
-            self.k_cache = None
-            self.v_cache = None
             
             return
             
@@ -1192,6 +1186,18 @@ class LlamaAttention(nn.Module):
                 "attn_mask",
                 ~torch.tril(torch.ones(max_seq_len, max_seq_len)).bool()[None, None, :, :]
             )
+            
+            
+            
+            
+    def reset_inference_states(
+        self,
+    ):
+        self.hidden_conv = None
+        self.hidden_num = None
+        self.hidden_denom = None
+        self.k_cache = None
+        self.v_cache = None
 
 
 
@@ -1515,7 +1521,7 @@ class LlamaAttention(nn.Module):
             else:
                 attention_mask = ~torch.tril(torch.ones(query_states.shape[2], query_states.shape[2])).bool().repeat(query_states.shape[0], query_states.shape[1], 1, 1).to(query_states.device)
                 attn_output = forwrd_gated(query_states, key_states, value_states, attention_mask, A)
-        
+
         # Not inference
         else:
             assert self.power in ["1", "2", "exp"]

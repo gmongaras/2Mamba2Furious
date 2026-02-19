@@ -52,8 +52,8 @@ def main():
     # attention_type = "squared__sm_norm__A_mask_type_neg_softplus__in_conv_k_2__dt_on_values"
     attention_type = attention_type_
     # dataset="gmongaras/EleutherAI_the_pile_deduplicated"
-    # dataset="gmongaras/SlimPajama-627B_Reupload"
-    dataset="HuggingFaceFW/fineweb"
+    dataset="gmongaras/SlimPajama-627B_Reupload"
+    # dataset="HuggingFaceFW/fineweb"
     # dataset = "gmongaras/dummy_text_dataset"
     mlp_type="normal" # gelu or normal
     clipping_value=None
