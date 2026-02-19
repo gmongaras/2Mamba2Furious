@@ -15,8 +15,8 @@ To setup, first ensure you have cuda properly setup. This can be checked by runn
 
 Create a virtual environment with 
 ```
-python -m venv GatedAttnEnv
-source GatedAttnEnv/bin/activate
+python -m venv TwoMambaEnv
+source TwoMambaEnv/bin/activate
 ```
 
 Install the requirements
@@ -38,10 +38,10 @@ pip install torch==2.6.0 --index-url https://download.pytorch.org/whl/cu118
 The script can be run with the following:
 
 ```
-torchrun --nproc_per_node=1 --master-port $PORT GPT_Trainer/train.py
+torchrun --nproc_per_node=2 --master-port $PORT GPT_Trainer/train.py $SEQLEN $WANDB_NAME $RUN_NAME
 ```
 
-where $PORT is just an arbitrary open port number.
+where $PORT is just an arbitrary open port number, $SEQLEN is the sequence length to train on, $WANDB_NAME is the name of the wandb run, and $RUN_NAME is the local run name.
 
 
 
