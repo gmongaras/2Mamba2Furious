@@ -1,0 +1,15 @@
+\begin{table}[htbp]
+\centering
+\begin{tabular}{l|ll}
+  \toprule
+  Model & Train loss & Test loss\\
+  \midrule
+  SM Norm + ReLU & \textbf{3.0} & \textbf{3.03} \\
+  Out Norm & 3.19 & 3.13 \\
+  Out Norm + ReLU & 3.12 & 3.06 \\
+  \bottomrule
+\end{tabular}
+\vspace{0.25em}
+\caption{}
+\label{}
+\end{table}

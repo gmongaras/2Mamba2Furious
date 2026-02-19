@@ -1,0 +1,19 @@
+\begin{table}[htbp]
+\centering
+\begin{tabular}{l|ll}
+  \toprule
+  Model & Train loss & Test loss\\
+  \midrule
+  ReLU & 3.12 & 3.06 \\
+  Conv (w=2) & 2.87 & 2.93 \\
+  D res & 3.18 & 3.11 \\
+  Z gate & 3.2 & 3.13 \\
+  discretize & 3.06 & 3.06 \\
+  A mask original & 2.94 & 2.98 \\
+  A mask softplus & \textbf{2.85} & \textbf{2.88} \\
+  \bottomrule
+\end{tabular}
+\vspace{0.25em}
+\caption{}
+\label{}
+\end{table}

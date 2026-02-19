@@ -1,0 +1,23 @@
+\begin{table}[htbp]
+\centering
+\begin{tabular}{l|ll}
+  \toprule
+  Model & Train loss & Test loss\\
+  \midrule
+  SM Norm + ReLU & 3.0 & 3.03 \\
+  Out Norm & 3.19 & 3.13 \\
+  Out Norm + ReLU & 3.12 & 3.06 \\
+  Out Norm + Conv (w=2) & 2.87 & 2.93 \\
+  Out Norm + Conv (w=3) & 2.94 & 2.91 \\
+  Out Norm + Conv (w=2) + SiLU & 2.95 & 2.9 \\
+  Out Norm + D res & 3.18 & 3.11 \\
+  Out Norm + Z gate & 3.2 & 3.13 \\
+  Out Norm + discretize & 3.06 & 3.06 \\
+  Out Norm + A mask original & 2.94 & 2.98 \\
+  Out Norm + A mask softplus & \textbf{2.85} & \textbf{2.88} \\
+  \bottomrule
+\end{tabular}
+\vspace{0.25em}
+\caption{}
+\label{}
+\end{table}

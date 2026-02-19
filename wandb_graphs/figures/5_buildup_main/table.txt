@@ -1,0 +1,17 @@
+\begin{table}[htbp]
+\centering
+\begin{tabular}{l|ll}
+  \toprule
+  Model & Train loss & Test loss\\
+  \midrule
+  Plain Linear & 3.19 & 3.13 \\
+  Conv (w=2) & 2.87 & 2.93 \\
+  Conv (w=2) + A mask original & 2.81 & 2.8 \\
+  Conv (w=2) + A mask softplus & \textbf{2.67} & 2.77 \\
+  Conv (w=2) + A mask softplus + discretize & 2.7 & \textbf{2.76} \\
+  \bottomrule
+\end{tabular}
+\vspace{0.25em}
+\caption{}
+\label{}
+\end{table}

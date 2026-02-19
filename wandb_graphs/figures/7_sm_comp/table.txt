@@ -1,0 +1,16 @@
+\begin{table}[htbp]
+\centering
+\begin{tabular}{l|ll}
+  \toprule
+  Model & Train loss & Test loss\\
+  \midrule
+  Conv (w=2) + A mask softplus + discretize & \textbf{2.7} & 2.76 \\
+  Squared + Conv (w=2) + A mask softplus + discretize & 2.77 & 2.73 \\
+  Mamba & 2.91 & 2.88 \\
+  Softmax & 2.75 & \textbf{2.73} \\
+  \bottomrule
+\end{tabular}
+\vspace{0.25em}
+\caption{}
+\label{}
+\end{table}

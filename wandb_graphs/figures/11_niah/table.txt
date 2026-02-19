@@ -1,0 +1,15 @@
+\begin{table}[htbp]
+\centering
+\begin{tabular}{l|ll}
+  \toprule
+  Model & Train loss & Test loss\\
+  \midrule
+  Mamba & 2.45 & 2.45 \\
+  Squared & \textbf{2.3} & 2.34 \\
+  Softmax & 2.42 & \textbf{2.33} \\
+  \bottomrule
+\end{tabular}
+\vspace{0.25em}
+\caption{}
+\label{}
+\end{table}
