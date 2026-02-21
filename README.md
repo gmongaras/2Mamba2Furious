@@ -5,7 +5,7 @@ This repo is code used for experiments in the paper [2Mama2Furious: Linear in co
 Unfiltered experiments conducted before writing the paper are supplied at [https://wandb.ai/gmongaras1/Gated_Attention_V2](https://wandb.ai/gmongaras1/Gated_Attention_V2) [https://wandb.ai/gmongaras1/Mamba_buildup](https://wandb.ai/gmongaras1/Mamba_buildup). Experiments from the paper as well as other experiments that never got into the paper are supplied at [https://wandb.ai/gmongaras1/Mamba_Squared_Experiemnts](https://wandb.ai/gmongaras1/Mamba_Squared_Experiemnts)
 
 
-I need to clean up the repo significantly. Will do that soon!
+The README comes from an older version of the repo so it is likely incorrect. For now, if you want to figure out the inference script (I will update how it works soon), I have [models on huggingface](https://huggingface.co/collections/gmongaras/2mamba2furious-linear-in-complexity-competitive-in-accurac) I need to clean up the repo significantly. Will do that soon!
 
 
 
