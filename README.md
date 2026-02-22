@@ -29,6 +29,7 @@ I use causal conv 1d. You can donload that at [https://github.com/Dao-AILab/caus
 
 If you plan to use the traditional mamba model, you will have to download that from the mamba_ssm repo here [https://github.com/state-spaces/mamba](https://github.com/state-spaces/mamba). Download is similar to causal conv 1d, you will likely have to manually download the wheel. I used version `2.2.6.post3`.
 
+Finally, update the submodules via `git submodule update --init --recursive`.
 
 
 
