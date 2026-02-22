@@ -28,6 +28,10 @@ Then, install the version of torch for your system at `https://pytorch.org/get-s
 pip install torch==2.6.0 --index-url https://download.pytorch.org/whl/cu118
 ```
 
+I use causal conv 1d a lot. You can donload that at [https://github.com/Dao-AILab/causal-conv1d](https://github.com/Dao-AILab/causal-conv1d). I used version 1.5.4 as I think that was the needed version for my cuda. You can find the version for `1.6.0` (latest as of now) here [https://github.com/Dao-AILab/causal-conv1d/releases/tag/v1.6.0](https://github.com/Dao-AILab/causal-conv1d/releases/tag/v1.6.0). Manual download is likely required.
+
+If you plan to use the traditional mamba model, you will have to download that from the mamba_ssm repo here [https://github.com/state-spaces/mamba](https://github.com/state-spaces/mamba). Download is similar to causal conv 1d, you will likely have to manually download the wheel. I used version `2.2.6.post3`.
+
 
 
 
