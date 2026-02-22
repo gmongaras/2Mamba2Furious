@@ -145,6 +145,9 @@ The NIAH heatmap can be generated with `niah_and_hs/niah_heatmap.py`. We hardcod
 
 All included figures can be found and reproduced using the script found in `wandb_graphs/`. We create a tool at [https://github.com/gmongaras/Wandb_Plotting_Tool](https://github.com/gmongaras/Wandb_Plotting_Tool) to easily create graphs. Annoyingly arxiv required pngs, not svgs. We don't include these but they can easily be created by running `https://github.com/gmongaras/2Mamba2Furious/blob/main/wandb_graphs/my_main.py`
 
+## Kernels
+
+A bunch of kernels to try to get things working are found in `kernel/`. All of them are quite bad. They were mostly creted just as a proof of concept as, memory wise, full quadratic attention is impossible to run, even with gradient checkpointing. The ones I ended up using are imported and used in `GPT_Trainer/LlamaDecoderLayerClean.py`. I wouldn't use these terrible kernels outside of experimenting with this repo lol.
 
 
 # Datasets
