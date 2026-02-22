@@ -1,4 +1,4 @@
-# <Paper title>
+# 2Mamba2Furious: Linear in complexity, competitive in accuracy
 
 This repo is code used for experiments in the paper [2Mamba2Furious: Linear in complexity, competitive in accuracy](https://arxiv.org/abs/2602.17363).
 
@@ -18,17 +18,14 @@ python -m venv TwoMambaEnv
 source TwoMambaEnv/bin/activate
 ```
 
-Install the requirements
-```
-pip install -r requirements.txt
-```
+Install the requirements. Instead of doing `pip install requirements.txt`, I would just take a look at requirements.txt and instal everything manually. The main things you need is torch and triton. All package versions in my environemnt is in requirements.txt, so pip installing it will likely fail. Most downloads you will need will unfortunately have to be manual.
 
 Then, install the version of torch for your system at `https://pytorch.org/get-started/locally/`. This repo was run on torch `2.6.0` with cuda `11.8`. Your system will likely need to use a different version of cuda. The following command install torch `2.6.0` for cuda `11.8`:
 ```
 pip install torch==2.6.0 --index-url https://download.pytorch.org/whl/cu118
 ```
 
-I use causal conv 1d a lot. You can donload that at [https://github.com/Dao-AILab/causal-conv1d](https://github.com/Dao-AILab/causal-conv1d). I used version 1.5.4 as I think that was the needed version for my cuda. You can find the version for `1.6.0` (latest as of now) here [https://github.com/Dao-AILab/causal-conv1d/releases/tag/v1.6.0](https://github.com/Dao-AILab/causal-conv1d/releases/tag/v1.6.0). Manual download is likely required.
+I use causal conv 1d. You can donload that at [https://github.com/Dao-AILab/causal-conv1d](https://github.com/Dao-AILab/causal-conv1d). I used version 1.5.4 as I think that was the needed version for my cuda. You can find the version for `1.6.0` (latest as of now) here [https://github.com/Dao-AILab/causal-conv1d/releases/tag/v1.6.0](https://github.com/Dao-AILab/causal-conv1d/releases/tag/v1.6.0). Manual download is likely required.
 
 If you plan to use the traditional mamba model, you will have to download that from the mamba_ssm repo here [https://github.com/state-spaces/mamba](https://github.com/state-spaces/mamba). Download is similar to causal conv 1d, you will likely have to manually download the wheel. I used version `2.2.6.post3`.
 
