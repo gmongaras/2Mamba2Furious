@@ -142,7 +142,7 @@ This python file contains a lot of the experiments we performed. The other Llama
 
 ## NIAH
 
-NIAH can be run with `GPT_Trainer/niah.py`. To reproduce our results, use one of the provided pretrained checkpoints. The dataset can be found at [nanotron/simple_needle_in_a_hay_stack](https://huggingface.co/datasets/nanotron/simple_needle_in_a_hay_stack). Note that since the cluster I ran NIAH on would kill my experiments, I only ran up to 1000 runs. The total number of rows is 12K. The dataset had a 16K character test, however these were removed for memory requirements. The random subset was seeded so our results should be reproducable.
+NIAH can be run with `niah_and_hs/niah.py`. To reproduce our results, use one of the provided pretrained checkpoints. The dataset can be found at [nanotron/simple_needle_in_a_hay_stack](https://huggingface.co/datasets/nanotron/simple_needle_in_a_hay_stack). Note that since the cluster I ran NIAH on would kill my experiments, I only ran up to 1000 runs. The total number of rows is 12K. The dataset had a 16K character test, however these were removed for memory requirements. The random subset was seeded so our results should be reproducable.
 
 The NIAH heatmap can be generated with `niah_and_hs/niah_heatmap.py`. We hardcode the results printed from the `niah.py` script.
 
