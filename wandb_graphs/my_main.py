@@ -310,7 +310,7 @@ plot_metrics_and_runs(
         ),
         Run(
             run_name="iiwxk216",
-            run_name_plot="Out Norm + discretize",
+            run_name_plot="Out Norm + value discretize",
             run_color="green"
         ),
         Run(
@@ -381,7 +381,7 @@ plot_metrics_and_runs(
         ),
         Run(
             run_name="na9afliq",
-            run_name_plot="Conv (w=2) + A mask softplus + discretize",
+            run_name_plot="Conv (w=2) + A mask softplus + value discretize",
             run_color="purple"
         ),
     ],
@@ -424,22 +424,22 @@ plot_metrics_and_runs(
     runs=[
         Run(
             run_name="na9afliq",
-            run_name_plot="Conv (w=2) + A mask softplus + discretize",
+            run_name_plot="Conv (w=2) + A mask softplus + value discretize",
             run_color="black"
         ),
         Run(
             run_name="35n4y5h0",
-            run_name_plot="Conv (w=2) + A mask softplus + discretize + SiLU",
+            run_name_plot="Conv (w=2) + A mask softplus + value discretize + SiLU",
             run_color="red"
         ),
         Run(
             run_name="6sihihh2",
-            run_name_plot="Conv (w=2) + A mask softplus + discretize + D res",
+            run_name_plot="Conv (w=2) + A mask softplus + value discretize + D res",
             run_color="green"
         ),
         Run(
             run_name="a3echla3",
-            run_name_plot="Conv (w=2) + A mask softplus + discretize + Z gate",
+            run_name_plot="Conv (w=2) + A mask softplus + value discretize + Z gate",
             run_color="blue"
         ),
     ],
@@ -502,22 +502,22 @@ plot_metrics_and_runs(
         ),
         Run(
             run_name="na9afliq",
-            run_name_plot="Conv (w=2) + A mask softplus + discretize",
+            run_name_plot="Conv (w=2) + A mask softplus + value discretize",
             run_color="blue"
         ),
         Run(
             run_name="35n4y5h0",
-            run_name_plot="Conv (w=2) + A mask softplus + discretize + SiLU",
+            run_name_plot="Conv (w=2) + A mask softplus + value discretize + SiLU",
             run_color="purple"
         ),
         Run(
             run_name="6sihihh2",
-            run_name_plot="Conv (w=2) + A mask softplus + discretize + D res",
+            run_name_plot="Conv (w=2) + A mask softplus + value discretize + D res",
             run_color="pink"
         ),
         Run(
             run_name="a3echla3",
-            run_name_plot="Conv (w=2) + A mask softplus + discretize + Z gate",
+            run_name_plot="Conv (w=2) + A mask softplus + value discretize + Z gate",
             run_color="grey"
         ),
     ],
@@ -560,12 +560,12 @@ plot_metrics_and_runs(
     runs=[
         Run(
             run_name="na9afliq",
-            run_name_plot="Conv (w=2) + A mask softplus + discretize",
+            run_name_plot="Conv (w=2) + A mask softplus + value discretize",
             run_color="red"
         ),
         Run(
             run_name="yjdb08ea",
-            run_name_plot="Squared + Conv (w=2) + A mask softplus + discretize",
+            run_name_plot="Squared + Conv (w=2) + A mask softplus + value discretize",
             run_color="blue"
         ),
         Run(
@@ -622,7 +622,7 @@ plot_metrics_and_runs(
     runs=[
         Run(
             run_name="yjdb08ea",
-            run_name_plot="Proposed",
+            run_name_plot="2Mamba",
             run_color="red"
         ),
         Run(
@@ -676,7 +676,7 @@ plot_metrics_and_runs(
     runs=[
         Run(
             run_name="do62gedv",
-            run_name_plot="Proposed",
+            run_name_plot="2Mamba",
             run_color="red"
         ),
         Run(
@@ -730,7 +730,7 @@ plot_metrics_and_runs(
     runs=[
         Run(
             run_name="gwt9v002",
-            run_name_plot="Proposed",
+            run_name_plot="2Mamba",
             run_color="red"
         ),
         Run(
@@ -784,7 +784,7 @@ plot_metrics_and_runs(
     runs=[
         Run(
             run_name="b85jtwri",
-            run_name_plot="Proposed",
+            run_name_plot="2Mamba",
             run_color="red"
         ),
         Run(
@@ -838,7 +838,7 @@ plot_metrics_and_runs(
     runs=[
         Run(
             run_name="zsi4ijie",
-            run_name_plot="Proposed",
+            run_name_plot="2Mamba",
             run_color="red"
         ),
         Run(
@@ -892,7 +892,7 @@ plot_metrics_and_runs(
     runs=[
         Run(
             run_name="uaaza0es",
-            run_name_plot="Proposed",
+            run_name_plot="2Mamba",
             run_color="red"
         ),
         Run(
@@ -998,12 +998,12 @@ plot_metrics_and_runs(
         ),
         Run(
             run_name="b85jtwri",
-            run_name_plot="Squared",
+            run_name_plot="2Mamba",
             run_color="green"
         ),
         Run(
             run_name="zx6wcpn2",
-            run_name_plot="Exp",
+            run_name_plot="2Mamba-E",
             run_color="red"
         ),
         Run(
@@ -1055,12 +1055,12 @@ plot_metrics_and_runs(
         ),
         Run(
             run_name="zsi4ijie",
-            run_name_plot="Squared",
+            run_name_plot="2Mamba",
             run_color="green"
         ),
         Run(
             run_name="su8ppg08",
-            run_name_plot="Exp",
+            run_name_plot="2Mamba-E",
             run_color="red"
         ),
         Run(
@@ -1112,12 +1112,12 @@ plot_metrics_and_runs(
         ),
         Run(
             run_name="uaaza0es",
-            run_name_plot="Squared",
+            run_name_plot="2Mamba",
             run_color="green"
         ),
         Run(
             run_name="pnacknd1",
-            run_name_plot="Exp",
+            run_name_plot="2Mamba-E",
             run_color="red"
         ),
         Run(
@@ -1172,7 +1172,7 @@ plot_metrics_and_runs(
         ),
         Run(
             run_name="d8sh2h6s",
-            run_name_plot="Squared",
+            run_name_plot="2Mamba",
             run_color="green"
         ),
         Run(
@@ -1226,7 +1226,7 @@ plot_metrics_and_runs(
         ),
         Run(
             run_name="bz7ovl6u",
-            run_name_plot="Squared",
+            run_name_plot="2Mamba",
             run_color="green"
         ),
         Run(
@@ -1280,7 +1280,7 @@ plot_metrics_and_runs(
         ),
         Run(
             run_name="9bjzvg18",
-            run_name_plot="Squared",
+            run_name_plot="2Mamba",
             run_color="green"
         ),
         Run(

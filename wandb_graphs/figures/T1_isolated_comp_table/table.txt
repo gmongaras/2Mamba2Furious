@@ -12,7 +12,7 @@
   Out Norm + Conv (w=2) + SiLU & 2.95 & 2.9 \\
   Out Norm + D res & 3.18 & 3.11 \\
   Out Norm + Z gate & 3.2 & 3.13 \\
-  Out Norm + discretize & 3.06 & 3.06 \\
+  Out Norm + value discretize & 3.06 & 3.06 \\
   Out Norm + A mask original & 2.94 & 2.98 \\
   Out Norm + A mask softplus & \textbf{2.85} & \textbf{2.88} \\
   \bottomrule
