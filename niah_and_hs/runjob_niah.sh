@@ -16,4 +16,4 @@ nproc_per_node=1
 
 
 source ~/.bashrc
-/users/gmongaras/miniconda3/bin/python GPT_Trainer/niah.py
+/users/gmongaras/miniconda3/bin/python niah_and_hs/niah.py
