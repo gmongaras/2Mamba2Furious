@@ -1,0 +1,19 @@
+\begin{table}[htbp]
+\centering
+\begin{tabular}{l|ll}
+  \toprule
+  Model & Train loss & Test loss\\
+  \midrule
+  ReLU & 3.12 & 3.06 \\
+  Conv (w=2) & 2.87 & 2.93 \\
+  Conv (w=3) & 2.94 & 2.91 \\
+  Conv (w=4) & \textbf{2.84} & 2.9 \\
+  Conv (w=2) + SiLU & 2.95 & 2.9 \\
+  Conv (w=3) + SiLU & 2.95 & 2.89 \\
+  Conv (w=4) + SiLU & 2.9 & \textbf{2.89} \\
+  \bottomrule
+\end{tabular}
+\vspace{0.25em}
+\caption{}
+\label{}
+\end{table}
