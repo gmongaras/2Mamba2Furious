@@ -1,4 +1,4 @@
-from plot import Metric, Run, TableInfo, plot_metrics_and_runs
+from Wandb_Plotting_Tool.plot import Metric, Run, TableInfo, plot_metrics_and_runs
 
 
 ### Plots 1 -- all three base models
@@ -892,7 +892,7 @@ plot_metrics_and_runs(
     runs=[
         Run(
             run_name="uaaza0es",
-            run_name_plot="Proposed",
+            run_name_plot="2Mamba",
             run_color="red"
         ),
         Run(
