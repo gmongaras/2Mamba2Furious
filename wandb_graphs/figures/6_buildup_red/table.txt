@@ -4,10 +4,10 @@
   \toprule
   Model & Train loss & Test loss\\
   \midrule
-  Conv (w=2) + A mask softplus + value discretize & \textbf{2.7} & \textbf{2.76} \\
-  Conv (w=2) + A mask softplus + value discretize + SiLU & 2.73 & 2.76 \\
-  Conv (w=2) + A mask softplus + value discretize + D res & 2.79 & 2.76 \\
-  Conv (w=2) + A mask softplus + value discretize + Z gate & 2.72 & 2.78 \\
+  Conv (w=2) + A mask softplus + discretize & \textbf{2.7} & \textbf{2.76} \\
+  Conv (w=2) + A mask softplus + discretize + SiLU & 2.73 & 2.76 \\
+  Conv (w=2) + A mask softplus + discretize + D res & 2.79 & 2.76 \\
+  Conv (w=2) + A mask softplus + discretize + Z gate & 2.72 & 2.78 \\
   \bottomrule
 \end{tabular}
 \vspace{0.25em}

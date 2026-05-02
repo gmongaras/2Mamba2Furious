@@ -4,7 +4,7 @@
   \toprule
   Model & Train loss & Test loss\\
   \midrule
-  Mamba & 2.45 & 2.45 \\
+  Mamba-2 & 2.45 & 2.45 \\
   2Mamba & \textbf{2.3} & 2.34 \\
   Softmax & 2.42 & \textbf{2.33} \\
   \bottomrule

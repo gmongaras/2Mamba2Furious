@@ -1,4 +1,4 @@
-from Wandb_Plotting_Tool.plot import Metric, Run, TableInfo, plot_metrics_and_runs
+from plot import Metric, Run, TableInfo, plot_metrics_and_runs
 
 
 ### Plots 1 -- all three base models
@@ -28,7 +28,7 @@ plot_metrics_and_runs(
         ),
         Run(
             run_name="qbcs9fqx",
-            run_name_plot="Mamba",
+            run_name_plot="Mamba-2",
             run_color="green"
         ),
         Run(
@@ -310,7 +310,7 @@ plot_metrics_and_runs(
         ),
         Run(
             run_name="iiwxk216",
-            run_name_plot="Out Norm + value discretize",
+            run_name_plot="Out Norm + discretize",
             run_color="green"
         ),
         Run(
@@ -381,7 +381,7 @@ plot_metrics_and_runs(
         ),
         Run(
             run_name="na9afliq",
-            run_name_plot="Conv (w=2) + A mask softplus + value discretize",
+            run_name_plot="Conv (w=2) + A mask softplus + discretize",
             run_color="purple"
         ),
     ],
@@ -424,22 +424,22 @@ plot_metrics_and_runs(
     runs=[
         Run(
             run_name="na9afliq",
-            run_name_plot="Conv (w=2) + A mask softplus + value discretize",
+            run_name_plot="Conv (w=2) + A mask softplus + discretize",
             run_color="black"
         ),
         Run(
             run_name="35n4y5h0",
-            run_name_plot="Conv (w=2) + A mask softplus + value discretize + SiLU",
+            run_name_plot="Conv (w=2) + A mask softplus + discretize + SiLU",
             run_color="red"
         ),
         Run(
             run_name="6sihihh2",
-            run_name_plot="Conv (w=2) + A mask softplus + value discretize + D res",
+            run_name_plot="Conv (w=2) + A mask softplus + discretize + D res",
             run_color="green"
         ),
         Run(
             run_name="a3echla3",
-            run_name_plot="Conv (w=2) + A mask softplus + value discretize + Z gate",
+            run_name_plot="Conv (w=2) + A mask softplus + discretize + Z gate",
             run_color="blue"
         ),
     ],
@@ -502,22 +502,22 @@ plot_metrics_and_runs(
         ),
         Run(
             run_name="na9afliq",
-            run_name_plot="Conv (w=2) + A mask softplus + value discretize",
+            run_name_plot="Conv (w=2) + A mask softplus + discretize",
             run_color="blue"
         ),
         Run(
             run_name="35n4y5h0",
-            run_name_plot="Conv (w=2) + A mask softplus + value discretize + SiLU",
+            run_name_plot="Conv (w=2) + A mask softplus + discretize + SiLU",
             run_color="purple"
         ),
         Run(
             run_name="6sihihh2",
-            run_name_plot="Conv (w=2) + A mask softplus + value discretize + D res",
+            run_name_plot="Conv (w=2) + A mask softplus + discretize + D res",
             run_color="pink"
         ),
         Run(
             run_name="a3echla3",
-            run_name_plot="Conv (w=2) + A mask softplus + value discretize + Z gate",
+            run_name_plot="Conv (w=2) + A mask softplus + discretize + Z gate",
             run_color="grey"
         ),
     ],
@@ -560,17 +560,17 @@ plot_metrics_and_runs(
     runs=[
         Run(
             run_name="na9afliq",
-            run_name_plot="Conv (w=2) + A mask softplus + value discretize",
+            run_name_plot="Conv (w=2) + A mask softplus + discretize",
             run_color="red"
         ),
         Run(
             run_name="yjdb08ea",
-            run_name_plot="Squared + Conv (w=2) + A mask softplus + value discretize",
+            run_name_plot="Squared + Conv (w=2) + A mask softplus + discretize",
             run_color="blue"
         ),
         Run(
             run_name="qbcs9fqx",
-            run_name_plot="Mamba",
+            run_name_plot="Mamba-2",
             run_color="green"
         ),
         Run(
@@ -627,7 +627,7 @@ plot_metrics_and_runs(
         ),
         Run(
             run_name="qbcs9fqx",
-            run_name_plot="Mamba",
+            run_name_plot="Mamba-2",
             run_color="green"
         ),
         Run(
@@ -681,7 +681,7 @@ plot_metrics_and_runs(
         ),
         Run(
             run_name="uo1nhef4",
-            run_name_plot="Mamba",
+            run_name_plot="Mamba-2",
             run_color="green"
         ),
         Run(
@@ -735,7 +735,7 @@ plot_metrics_and_runs(
         ),
         Run(
             run_name="r06dnukl",
-            run_name_plot="Mamba",
+            run_name_plot="Mamba-2",
             run_color="green"
         ),
         Run(
@@ -789,7 +789,7 @@ plot_metrics_and_runs(
         ),
         Run(
             run_name="gmbstg9n",
-            run_name_plot="Mamba",
+            run_name_plot="Mamba-2",
             run_color="green"
         ),
         Run(
@@ -843,7 +843,7 @@ plot_metrics_and_runs(
         ),
         Run(
             run_name="z1rbud4l",
-            run_name_plot="Mamba",
+            run_name_plot="Mamba-2",
             run_color="green"
         ),
         Run(
@@ -892,12 +892,12 @@ plot_metrics_and_runs(
     runs=[
         Run(
             run_name="uaaza0es",
-            run_name_plot="2Mamba",
+            run_name_plot="Proposed",
             run_color="red"
         ),
         Run(
             run_name="ib3m3kgq",
-            run_name_plot="Mamba",
+            run_name_plot="Mamba-2",
             run_color="green"
         ),
         Run(
@@ -945,12 +945,12 @@ plot_metrics_and_runs(
     runs=[
         Run(
             run_name="pnacknd1",
-            run_name_plot="No Discretization",
+            run_name_plot="No Value Discretization",
             run_color="blue"
         ),
         Run(
             run_name="tla78qdo",
-            run_name_plot="With Discretization",
+            run_name_plot="With Value Discretization",
             run_color="red"
         ),
     ],
@@ -993,7 +993,7 @@ plot_metrics_and_runs(
     runs=[
         Run(
             run_name="gmbstg9n",
-            run_name_plot="Mamba",
+            run_name_plot="Mamba-2",
             run_color="blue"
         ),
         Run(
@@ -1050,7 +1050,7 @@ plot_metrics_and_runs(
     runs=[
         Run(
             run_name="z1rbud4l",
-            run_name_plot="Mamba",
+            run_name_plot="Mamba-2",
             run_color="blue"
         ),
         Run(
@@ -1107,7 +1107,7 @@ plot_metrics_and_runs(
     runs=[
         Run(
             run_name="ib3m3kgq",
-            run_name_plot="Mamba",
+            run_name_plot="Mamba-2",
             run_color="blue"
         ),
         Run(
@@ -1167,7 +1167,7 @@ plot_metrics_and_runs(
     runs=[
         Run(
             run_name="3b344ay9",
-            run_name_plot="Mamba",
+            run_name_plot="Mamba-2",
             run_color="blue"
         ),
         Run(
@@ -1221,7 +1221,7 @@ plot_metrics_and_runs(
     runs=[
         Run(
             run_name="43kdcjk5",
-            run_name_plot="Mamba",
+            run_name_plot="Mamba-2",
             run_color="blue"
         ),
         Run(
@@ -1275,7 +1275,7 @@ plot_metrics_and_runs(
     runs=[
         Run(
             run_name="np9vmjxl",
-            run_name_plot="Mamba",
+            run_name_plot="Mamba-2",
             run_color="blue"
         ),
         Run(

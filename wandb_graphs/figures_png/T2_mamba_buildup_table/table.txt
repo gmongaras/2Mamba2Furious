@@ -8,10 +8,10 @@
   Conv (w=2) & 2.87 & 2.93 \\
   Conv (w=2) + A mask original & 2.81 & 2.8 \\
   Conv (w=2) + A mask softplus & \textbf{2.67} & 2.77 \\
-  Conv (w=2) + A mask softplus + value discretize & 2.7 & \textbf{2.76} \\
-  Conv (w=2) + A mask softplus + value discretize + SiLU & 2.73 & 2.76 \\
-  Conv (w=2) + A mask softplus + value discretize + D res & 2.79 & 2.76 \\
-  Conv (w=2) + A mask softplus + value discretize + Z gate & 2.72 & 2.78 \\
+  Conv (w=2) + A mask softplus + discretize & 2.7 & \textbf{2.76} \\
+  Conv (w=2) + A mask softplus + discretize + SiLU & 2.73 & 2.76 \\
+  Conv (w=2) + A mask softplus + discretize + D res & 2.79 & 2.76 \\
+  Conv (w=2) + A mask softplus + discretize + Z gate & 2.72 & 2.78 \\
   \bottomrule
 \end{tabular}
 \vspace{0.25em}

@@ -4,8 +4,8 @@
   \toprule
   Model & Train loss & Test loss\\
   \midrule
-  No Discretization & \textbf{2.84} & \textbf{2.66} \\
-  With Discretization & 2.87 & 2.76 \\
+  No Value Discretization & \textbf{2.84} & \textbf{2.66} \\
+  With Value Discretization & 2.87 & 2.76 \\
   \bottomrule
 \end{tabular}
 \vspace{0.25em}
