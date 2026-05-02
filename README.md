@@ -9,7 +9,7 @@ Unfiltered experiments conducted before writing the paper are supplied at
 - [https://wandb.ai/gmongaras1/Gated_Attention_V2](https://wandb.ai/gmongaras1/Gated_Attention_V2)
 - [https://wandb.ai/gmongaras1/Mamba_buildup](https://wandb.ai/gmongaras1/Mamba_buildup).
 
-
+Bunch of random notes [here](https://docs.google.com/document/d/1XUMWA9Hh7IsKyaCh3Tovg4AewRH4MJmbHrX1iuQWKnA/edit?tab=t.0)
 
 # Setup
 
