@@ -4,9 +4,10 @@
   \toprule
   Model & Train loss & Test loss\\
   \midrule
-  Mamba-2 & 2.45 & 2.45 \\
-  2Mamba & \textbf{2.3} & 2.34 \\
-  Softmax & 2.42 & \textbf{2.33} \\
+  Mamba-2 & 2.51 & 2.45 \\
+  2Mamba & \textbf{2.36} & 2.34 \\
+  GatedDeltaNet & 2.39 & 2.43 \\
+  Softmax & 2.37 & \textbf{2.33} \\
   \bottomrule
 \end{tabular}
 \vspace{0.25em}

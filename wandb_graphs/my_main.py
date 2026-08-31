@@ -1139,9 +1139,9 @@ plot_metrics_and_runs(
         num_decimals=2
     ),
 )
-"""
 
-"""
+
+
 ### Graph 11 - Long run + NIAH
 plot_metrics_and_runs(
     metrics=[
@@ -1174,6 +1174,11 @@ plot_metrics_and_runs(
             run_name="d8sh2h6s",
             run_name_plot="2Mamba",
             run_color="green"
+        ),
+        Run(
+            run_name="41llevsu",
+            run_name_plot="GatedDeltaNet",
+            run_color="red"
         ),
         Run(
             run_name="txhu1vhg",
